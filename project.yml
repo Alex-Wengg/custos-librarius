@@ -1,0 +1,27 @@
+name: Librarian
+options:
+  bundleIdPrefix: com.librarian
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  mlx-swift-lm:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    branch: main
+targets:
+  Librarian:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+    dependencies:
+      - package: mlx-swift-lm
+        product: MLXLLM
+      - package: mlx-swift-lm
+        product: MLXLMCommon
+      - package: mlx-swift-lm
+        product: MLXEmbedders
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.librarian.app
+      INFOPLIST_FILE: Sources/Info.plist
+      PRODUCT_NAME: Librarian
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
