@@ -1,5 +1,10 @@
 # Custos Librarius
 
+<img width="1100" height="741" alt="image" src="https://github.com/user-attachments/assets/53dfdb71-0dcd-4198-91c2-bfe24f0b5c8f" />
+
+<img width="1004" height="594" alt="image" src="https://github.com/user-attachments/assets/0743a919-16a6-430c-9bcf-82c63c966b7e" />
+
+
 *Your personal AI guardian of knowledge*
 
 A native macOS app that turns your documents into an AI-powered research assistant. Built with SwiftUI and Apple's MLX framework for on-device inference.
