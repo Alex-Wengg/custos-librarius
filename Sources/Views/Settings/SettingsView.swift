@@ -6,9 +6,18 @@ struct SettingsView: View {
     @AppStorage("embeddingModelId") private var embeddingModelId = "mlx-community/bge-small-en-v1.5-quantized-4bit"
     @AppStorage("maxTokens") private var maxTokens = 512
     @AppStorage("temperature") private var temperature = 0.7
+    @AppStorage("appTheme") private var appTheme = "dark"
 
     var body: some View {
         Form {
+            Section("Appearance") {
+                Picker("Theme:", selection: $appTheme) {
+                    Text("Dark").tag("dark")
+                    Text("Light").tag("light")
+                }
+                .pickerStyle(.segmented)
+            }
+
             Section("Models") {
                 TextField("LLM Model:", text: $modelId)
                     .textFieldStyle(.roundedBorder)
@@ -51,11 +60,30 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+
+            Section("Developer") {
+                Button("Run LLM Tests") {
+                    showLLMTests = true
+                }
+                .disabled(appState.chatService == nil)
+
+                if appState.chatService == nil {
+                    Text("Open a project to enable LLM tests")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
         .padding()
         .frame(width: 500, height: 400)
+        .sheet(isPresented: $showLLMTests) {
+            LLMTestView()
+                .environmentObject(appState)
+        }
     }
+
+    @State private var showLLMTests = false
 }
 
 struct NewProjectSheet: View {

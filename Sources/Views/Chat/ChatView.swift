@@ -6,25 +6,35 @@ struct ChatView: View {
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack(alignment: .bottom) {
             // Messages
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(appState.messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
+                    LazyVStack(alignment: .leading, spacing: 20) {
+                        if appState.messages.isEmpty {
+                            EmptyStateView()
+                                .padding(.top, 100)
+                        } else {
+                            ForEach(appState.messages) { message in
+                                MessageBubble(message: message)
+                                    .id(message.id)
+                            }
                         }
 
                         if appState.isGenerating {
-                            HStack {
+                            HStack(spacing: 12) {
                                 ProgressView()
                                     .controlSize(.small)
                                 Text("Thinking...")
+                                    .font(.subheadline)
                                     .foregroundColor(.secondary)
                             }
-                            .padding()
+                            .padding(.leading)
+                            .padding(.top, 8)
                         }
+                        
+                        Color.clear
+                            .frame(height: 80) // Spacer for input bar
                     }
                     .padding()
                 }
@@ -37,34 +47,45 @@ struct ChatView: View {
                 }
             }
 
-            Divider()
-
             // Input
-            HStack(spacing: 12) {
-                TextField("Ask a question about your documents...", text: $inputText, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...5)
-                    .focused($isInputFocused)
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            isInputFocused = true
+            VStack(spacing: 0) {
+                Divider()
+                    .opacity(0) // Hide default divider, we'll use shadow or background
+                
+                HStack(alignment: .bottom, spacing: 12) {
+                    TextField("Ask a question about your documents...", text: $inputText, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .padding(12)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 20))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20)
+                                .stroke(isInputFocused ? Theme.copper : Color.secondary.opacity(0.2), lineWidth: 1)
+                        )
+                        .lineLimit(1...5)
+                        .focused($isInputFocused)
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                isInputFocused = true
+                            }
                         }
-                    }
-                    .onSubmit {
-                        sendMessage()
-                    }
+                        .onSubmit {
+                            sendMessage()
+                        }
 
-                Button {
-                    sendMessage()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
+                    Button {
+                        sendMessage()
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundStyle(inputText.isEmpty || appState.isGenerating ? Color.secondary.opacity(0.5) : Theme.copper)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(inputText.isEmpty || appState.isGenerating)
                 }
-                .buttonStyle(.plain)
-                .disabled(inputText.isEmpty || appState.isGenerating)
+                .padding()
+                .background(.ultraThinMaterial)
             }
-            .padding()
-            .background(.background)
         }
         .navigationTitle("Chat")
         .toolbar {
@@ -87,8 +108,9 @@ struct ChatView: View {
                             .foregroundColor(.secondary)
                     }
                 } else {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
+                    Image(systemName: "bolt.fill")
+                        .foregroundColor(Theme.copper)
+                        .help("Model Loaded")
                 }
             }
         }
@@ -165,29 +187,83 @@ struct ChatView: View {
     }
 }
 
+struct EmptyStateView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 48))
+                .foregroundStyle(Theme.copper.opacity(0.8))
+            Text("Start a conversation")
+                .font(Theme.headerFont)
+            Text("Ask questions about your documents and get AI-powered answers.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
 struct MessageBubble: View {
     let message: ChatMessage
 
     var body: some View {
-        HStack {
+        HStack(alignment: .bottom, spacing: 8) {
             if message.role == .user {
                 Spacer()
+            } else {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(Theme.copper.gradient)
+                    .clipShape(Circle())
             }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
                 Text(message.content)
-                    .padding(12)
-                    .background(message.role == .user ? Color.accentColor : Color(.systemGray).opacity(0.2))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        message.role == .user ?
+                        Theme.bubbleUser.opacity(0.9) :
+                        Theme.bubbleAssistant
+                    )
+                    .background(
+                         message.role == .user ? AnyShapeStyle(Theme.bubbleUser) : AnyShapeStyle(.thinMaterial)
+                    )
                     .foregroundColor(message.role == .user ? .white : .primary)
-                    .cornerRadius(16)
+                    .clipShape(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 18,
+                            bottomLeadingRadius: message.role == .user ? 18 : 0,
+                            bottomTrailingRadius: message.role == .user ? 0 : 18,
+                            topTrailingRadius: 18
+                        )
+                    )
+                    .overlay(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 18,
+                            bottomLeadingRadius: message.role == .user ? 18 : 0,
+                            bottomTrailingRadius: message.role == .user ? 0 : 18,
+                            topTrailingRadius: 18
+                        )
+                        .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+                    )
 
                 Text(message.timestamp, style: .time)
                     .font(.caption2)
                     .foregroundColor(.secondary)
+                    .padding(.horizontal, 4)
             }
             .frame(maxWidth: 600, alignment: message.role == .user ? .trailing : .leading)
 
-            if message.role == .assistant {
+            if message.role == .user {
+                Image(systemName: "person.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(Theme.navy)
+            } else {
                 Spacer()
             }
         }

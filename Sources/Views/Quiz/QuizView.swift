@@ -3,6 +3,8 @@ import AppKit
 
 struct QuizView: View {
     @EnvironmentObject var appState: AppState
+
+    // Multiple Choice State
     @State private var questions: [QuizQuestion] = []
     @State private var currentIndex = 0
     @State private var selectedAnswer: Int? = nil
@@ -12,7 +14,13 @@ struct QuizView: View {
     @State private var quizComplete = false
     @State private var showReview = false
 
+    // Open-Ended/Discussion State
+    @State private var openEndedQuestions: [OpenEndedQuestion] = []
+    @State private var currentMessage = ""
+    @State private var isResponding = false
+
     // Settings
+    @State private var quizType: QuizType = .multipleChoice
     @State private var questionCount = 5
     @State private var difficulty: QuizDifficulty = .medium
     @State private var selectedSources: Set<String> = []
@@ -21,16 +29,24 @@ struct QuizView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if questions.isEmpty && !isGenerating {
+            if (questions.isEmpty && openEndedQuestions.isEmpty) && !isGenerating {
                 quizSetup
             } else if isGenerating {
                 generatingView
             } else if showReview {
                 reviewView
             } else if quizComplete {
-                resultsView
+                if quizType == .multipleChoice {
+                    resultsView
+                } else {
+                    openEndedResultsView
+                }
             } else {
-                quizContent
+                if quizType == .multipleChoice {
+                    quizContent
+                } else {
+                    openEndedContent
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -52,6 +68,23 @@ struct QuizView: View {
                 Text("Test Your Knowledge")
                     .font(.title)
                     .fontWeight(.bold)
+
+                // Quiz Type
+                GroupBox("Quiz Type") {
+                    Picker("Type", selection: $quizType) {
+                        ForEach(QuizType.allCases, id: \.self) { type in
+                            Text(type.rawValue).tag(type)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(8)
+
+                    Text(quizType == .multipleChoice
+                        ? "Select the correct answer from 4 options"
+                        : "Discuss topics with AI - explore ideas through conversation")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
 
                 // Question Count
                 GroupBox("Number of Questions") {
@@ -161,53 +194,53 @@ struct QuizView: View {
                     .foregroundColor(.secondary)
             }
 
-            // Question Card
-            VStack(alignment: .leading, spacing: 16) {
-                Text(questions[currentIndex].question)
-                    .font(.title3)
-                    .fontWeight(.medium)
+            // Scrollable Question Card
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(questions[currentIndex].question)
+                        .font(.title3)
+                        .fontWeight(.medium)
 
-                // Options
-                ForEach(0..<questions[currentIndex].options.count, id: \.self) { index in
-                    QuizOptionButton(
-                        text: questions[currentIndex].options[index],
-                        index: index,
-                        selectedAnswer: selectedAnswer,
-                        correctAnswer: questions[currentIndex].correctIndex,
-                        hasAnswered: hasAnswered
-                    ) {
-                        if !hasAnswered {
-                            selectAnswer(index)
+                    // Options
+                    ForEach(0..<questions[currentIndex].options.count, id: \.self) { index in
+                        QuizOptionButton(
+                            text: questions[currentIndex].options[index],
+                            index: index,
+                            selectedAnswer: selectedAnswer,
+                            correctAnswer: questions[currentIndex].correctIndex,
+                            hasAnswered: hasAnswered
+                        ) {
+                            if !hasAnswered {
+                                selectAnswer(index)
+                            }
+                        }
+                    }
+
+                    // Explanation (shown after answering)
+                    if hasAnswered && !questions[currentIndex].explanation.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Divider()
+
+                            HStack {
+                                Image(systemName: selectedAnswer == questions[currentIndex].correctIndex ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .foregroundColor(selectedAnswer == questions[currentIndex].correctIndex ? .green : .red)
+                                Text(selectedAnswer == questions[currentIndex].correctIndex ? "Correct!" : "Incorrect")
+                                    .fontWeight(.medium)
+                            }
+
+                            Text(questions[currentIndex].explanation)
+                                .font(.callout)
+                                .foregroundColor(.secondary)
+                                .padding()
+                                .background(Color(.systemGray).opacity(0.1))
+                                .cornerRadius(8)
                         }
                     }
                 }
-
-                // Explanation (shown after answering)
-                if hasAnswered && !questions[currentIndex].explanation.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Divider()
-
-                        HStack {
-                            Image(systemName: selectedAnswer == questions[currentIndex].correctIndex ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundColor(selectedAnswer == questions[currentIndex].correctIndex ? .green : .red)
-                            Text(selectedAnswer == questions[currentIndex].correctIndex ? "Correct!" : "Incorrect")
-                                .fontWeight(.medium)
-                        }
-
-                        Text(questions[currentIndex].explanation)
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-                            .padding()
-                            .background(Color(.systemGray).opacity(0.1))
-                            .cornerRadius(8)
-                    }
-                }
+                .padding(24)
+                .background(Color(.systemGray).opacity(0.1))
+                .cornerRadius(16)
             }
-            .padding(24)
-            .background(Color(.systemGray).opacity(0.1))
-            .cornerRadius(16)
-
-            Spacer()
 
             // Navigation
             HStack {
@@ -334,6 +367,170 @@ struct QuizView: View {
         }
     }
 
+    // MARK: - Discussion Content
+
+    var openEndedContent: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("Topic \(currentIndex + 1) of \(openEndedQuestions.count)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(openEndedQuestions[currentIndex].source)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                if openEndedQuestions[currentIndex].isComplete {
+                    Label("Complete", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+
+                Button {
+                    markTopicComplete()
+                } label: {
+                    Text(openEndedQuestions[currentIndex].isComplete ? "Next Topic" : "Done with Topic")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding()
+            .background(Color(.systemGray).opacity(0.05))
+
+            Divider()
+
+            // Discussion area
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        // Topic question
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Discussion Topic", systemImage: "bubble.left.and.bubble.right")
+                                .font(.caption)
+                                .foregroundColor(.accentColor)
+
+                            Text(openEndedQuestions[currentIndex].question)
+                                .font(.title3)
+                                .fontWeight(.medium)
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.accentColor.opacity(0.1))
+                        .cornerRadius(12)
+
+                        // Discussion messages
+                        ForEach(openEndedQuestions[currentIndex].discussion) { message in
+                            DiscussionBubble(message: message)
+                        }
+
+                        // Typing indicator
+                        if isResponding {
+                            HStack {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Thinking...")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding()
+                            .id("typing")
+                        }
+                    }
+                    .padding()
+                }
+                .onChange(of: openEndedQuestions[currentIndex].discussion.count) { _, _ in
+                    withAnimation {
+                        proxy.scrollTo("typing", anchor: .bottom)
+                    }
+                }
+            }
+
+            Divider()
+
+            // Input area
+            HStack(spacing: 12) {
+                TextField("Share your thoughts...", text: $currentMessage, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...5)
+                    .padding(12)
+                    .background(Color(.textBackgroundColor))
+                    .cornerRadius(8)
+
+                Button {
+                    sendMessage()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 28))
+                }
+                .disabled(currentMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isResponding)
+            }
+            .padding()
+        }
+        .frame(maxWidth: 700)
+    }
+
+    // MARK: - Discussion Results
+
+    var openEndedResultsView: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                let completedCount = openEndedQuestions.filter { $0.isComplete }.count
+
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 64))
+                    .foregroundColor(.accentColor)
+
+                Text("Discussion Complete!")
+                    .font(.title)
+                    .fontWeight(.bold)
+
+                Text("\(completedCount) of \(openEndedQuestions.count) topics explored")
+                    .font(.title2)
+                    .foregroundColor(.secondary)
+
+                // Topics summary
+                VStack(spacing: 12) {
+                    ForEach(Array(openEndedQuestions.enumerated()), id: \.element.id) { index, question in
+                        HStack {
+                            Text("Topic \(index + 1)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .frame(width: 60, alignment: .leading)
+
+                            Text(question.question)
+                                .font(.caption)
+                                .lineLimit(1)
+
+                            Spacer()
+
+                            Image(systemName: question.isComplete ? "checkmark.circle.fill" : "circle")
+                                .foregroundColor(question.isComplete ? .green : .secondary)
+
+                            Text("\(question.discussion.count) messages")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color(.systemGray).opacity(0.1))
+                .cornerRadius(12)
+
+                Button {
+                    resetQuiz()
+                } label: {
+                    Label("New Discussion", systemImage: "arrow.counterclockwise")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(32)
+        }
+    }
+
     // MARK: - Review View
 
     var reviewView: some View {
@@ -400,18 +597,32 @@ struct QuizView: View {
         Task { @MainActor in
             do {
                 let sources = selectedSources.isEmpty ? nil : Array(selectedSources)
-                let generated = try await appState.chatService?.generateQuiz(
-                    count: questionCount,
-                    difficulty: difficulty,
-                    sources: sources
-                ) ?? []
-                questions = generated
+
+                if quizType == .multipleChoice {
+                    let generated = try await appState.chatService?.generateQuiz(
+                        count: questionCount,
+                        difficulty: difficulty,
+                        sources: sources
+                    ) ?? []
+                    questions = generated
+                    openEndedQuestions = []
+                } else {
+                    let generated = try await appState.chatService?.generateOpenEndedQuiz(
+                        count: questionCount,
+                        difficulty: difficulty,
+                        sources: sources
+                    ) ?? []
+                    openEndedQuestions = generated
+                    questions = []
+                }
+
                 currentIndex = 0
                 score = 0
                 selectedAnswer = nil
                 hasAnswered = false
                 quizComplete = false
                 showReview = false
+                currentMessage = ""
             } catch {
                 print("Error generating quiz: \(error)")
             }
@@ -421,12 +632,55 @@ struct QuizView: View {
 
     func resetQuiz() {
         questions = []
+        openEndedQuestions = []
         currentIndex = 0
         score = 0
         selectedAnswer = nil
         hasAnswered = false
         quizComplete = false
         showReview = false
+        currentMessage = ""
+    }
+
+    func sendMessage() {
+        guard currentIndex < openEndedQuestions.count else { return }
+        let messageText = currentMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !messageText.isEmpty else { return }
+
+        // Add user message
+        let userMessage = DiscussionMessage(content: messageText, isUser: true)
+        openEndedQuestions[currentIndex].discussion.append(userMessage)
+        currentMessage = ""
+        isResponding = true
+
+        Task { @MainActor in
+            do {
+                let response = try await appState.chatService?.discussAnswer(
+                    question: openEndedQuestions[currentIndex],
+                    userAnswer: messageText,
+                    previousMessages: Array(openEndedQuestions[currentIndex].discussion.dropLast())
+                ) ?? "I'm having trouble responding. Please try again."
+
+                let aiMessage = DiscussionMessage(content: response, isUser: false)
+                openEndedQuestions[currentIndex].discussion.append(aiMessage)
+            } catch {
+                print("Error in discussion: \(error)")
+                let errorMessage = DiscussionMessage(content: "Sorry, I encountered an error. Please try again.", isUser: false)
+                openEndedQuestions[currentIndex].discussion.append(errorMessage)
+            }
+            isResponding = false
+        }
+    }
+
+    func markTopicComplete() {
+        openEndedQuestions[currentIndex].isComplete = true
+
+        if currentIndex < openEndedQuestions.count - 1 {
+            currentIndex += 1
+            currentMessage = ""
+        } else {
+            quizComplete = true
+        }
     }
 
     func exportToPDF() {
@@ -442,12 +696,22 @@ struct QuizView: View {
     func createPDF(at url: URL) {
         let pdfData = NSMutableData()
         let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792) // Letter size
-
-        UIGraphicsBeginPDFContextToData(pdfData, pageRect, nil)
-
-        var yPosition: CGFloat = 50
         let margin: CGFloat = 50
         let contentWidth = pageRect.width - (margin * 2)
+
+        UIGraphicsBeginPDFContextToData(pdfData, pageRect, nil)
+        UIGraphicsBeginPDFPage()
+
+        var yPosition: CGFloat = 50
+
+        // Helper to draw wrapped text and return height used
+        func drawWrappedText(_ text: String, at y: CGFloat, attrs: [NSAttributedString.Key: Any], indent: CGFloat = 0) -> CGFloat {
+            let attrString = NSAttributedString(string: text, attributes: attrs)
+            let textRect = CGRect(x: margin + indent, y: y, width: contentWidth - indent, height: .greatestFiniteMagnitude)
+            let boundingRect = attrString.boundingRect(with: CGSize(width: textRect.width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading])
+            attrString.draw(in: CGRect(x: margin + indent, y: y, width: contentWidth - indent, height: boundingRect.height))
+            return boundingRect.height
+        }
 
         func newPageIfNeeded(_ height: CGFloat) {
             if yPosition + height > pageRect.height - 50 {
@@ -457,50 +721,57 @@ struct QuizView: View {
             }
         }
 
-        // Title page
-        UIGraphicsBeginPDFPage()
-
+        // Title
         let titleAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.boldSystemFont(ofSize: 24),
             .foregroundColor: NSColor.black
         ]
-        let title = "Quiz Results - \(difficulty.rawValue)"
-        title.draw(at: CGPoint(x: margin, y: yPosition), withAttributes: titleAttrs)
-        yPosition += 40
+        yPosition += drawWrappedText("Quiz Results - \(difficulty.rawValue)", at: yPosition, attrs: titleAttrs) + 10
 
-        let scoreText = "Score: \(score)/\(questions.count) (\(Int(Double(score)/Double(questions.count)*100))%)"
+        // Score
         let scoreAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 16),
             .foregroundColor: NSColor.darkGray
         ]
-        scoreText.draw(at: CGPoint(x: margin, y: yPosition), withAttributes: scoreAttrs)
-        yPosition += 50
+        let percentage = questions.count > 0 ? Int(Double(score) / Double(questions.count) * 100) : 0
+        yPosition += drawWrappedText("Score: \(score)/\(questions.count) (\(percentage)%)", at: yPosition, attrs: scoreAttrs) + 10
+
+        // Date
+        let dateAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12),
+            .foregroundColor: NSColor.gray
+        ]
+        yPosition += drawWrappedText("Date: \(Date().formatted(date: .long, time: .shortened))", at: yPosition, attrs: dateAttrs) + 30
 
         // Questions
         let questionAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.boldSystemFont(ofSize: 14),
+            .font: NSFont.boldSystemFont(ofSize: 13),
             .foregroundColor: NSColor.black
         ]
         let optionAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12),
+            .font: NSFont.systemFont(ofSize: 11),
             .foregroundColor: NSColor.darkGray
         ]
         let correctAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12),
+            .font: NSFont.systemFont(ofSize: 11),
             .foregroundColor: NSColor.systemGreen
         ]
         let wrongAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12),
+            .font: NSFont.systemFont(ofSize: 11),
             .foregroundColor: NSColor.systemRed
+        ]
+        let explanationAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10),
+            .foregroundColor: NSColor.gray
         ]
 
         for (i, question) in questions.enumerated() {
-            newPageIfNeeded(150)
+            newPageIfNeeded(120)
 
-            let qText = "\(i + 1). \(question.question)"
-            qText.draw(at: CGPoint(x: margin, y: yPosition), withAttributes: questionAttrs)
-            yPosition += 25
+            // Question number and text
+            yPosition += drawWrappedText("\(i + 1). \(question.question)", at: yPosition, attrs: questionAttrs) + 8
 
+            // Options
             for (j, option) in question.options.enumerated() {
                 let prefix = ["A", "B", "C", "D"][j]
                 let isCorrect = j == question.correctIndex
@@ -508,12 +779,18 @@ struct QuizView: View {
                 let attrs = isCorrect ? correctAttrs : (wasSelected ? wrongAttrs : optionAttrs)
                 let marker = isCorrect ? " ✓" : (wasSelected ? " ✗" : "")
 
-                let optText = "   \(prefix). \(option)\(marker)"
-                optText.draw(at: CGPoint(x: margin, y: yPosition), withAttributes: attrs)
-                yPosition += 18
+                newPageIfNeeded(20)
+                yPosition += drawWrappedText("\(prefix). \(option)\(marker)", at: yPosition, attrs: attrs, indent: 15) + 4
             }
 
-            yPosition += 15
+            // Explanation
+            if !question.explanation.isEmpty {
+                newPageIfNeeded(40)
+                yPosition += 5
+                yPosition += drawWrappedText("Explanation: \(question.explanation)", at: yPosition, attrs: explanationAttrs, indent: 15) + 5
+            }
+
+            yPosition += 20
         }
 
         UIGraphicsEndPDFContext()
@@ -527,6 +804,30 @@ struct QuizView: View {
 }
 
 // MARK: - Supporting Views
+
+struct DiscussionBubble: View {
+    let message: DiscussionMessage
+
+    var body: some View {
+        HStack {
+            if message.isUser { Spacer(minLength: 60) }
+
+            VStack(alignment: message.isUser ? .trailing : .leading, spacing: 4) {
+                Text(message.content)
+                    .padding(12)
+                    .background(message.isUser ? Color.accentColor : Color(.systemGray).opacity(0.2))
+                    .foregroundColor(message.isUser ? .white : .primary)
+                    .cornerRadius(16)
+
+                Text(message.timestamp, style: .time)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
+            if !message.isUser { Spacer(minLength: 60) }
+        }
+    }
+}
 
 struct QuizOptionButton: View {
     let text: String

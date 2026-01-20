@@ -37,28 +37,46 @@ struct SidebarView: View {
     var body: some View {
         List(selection: $appState.selectedTab) {
             if appState.currentProject != nil {
-                Section("Project") {
+                Section {
                     ForEach(SidebarItem.allCases.filter { $0 != .settings }) { item in
-                        Label(item.rawValue, systemImage: item.icon)
-                            .tag(item)
+                        NavigationLink(value: item) {
+                            Label(item.rawValue, systemImage: item.icon)
+                                .font(.system(size: 14, weight: .medium))
+                                .padding(.vertical, 4)
+                                .foregroundStyle(appState.selectedTab == item ? Theme.copper : .primary)
+                        }
+                        .tag(item)
                     }
+                } header: {
+                    Text("Project")
+                        .font(Theme.subHeaderFont)
+                        .foregroundStyle(Theme.copper)
+                        .padding(.top, 8)
                 }
             }
 
-            Section("Recent Projects") {
+            Section {
                 ForEach(appState.projects) { project in
                     Button {
                         appState.currentProject = project
                         appState.loadProjectData()
                     } label: {
                         Label(project.name, systemImage: "folder")
+                            .font(.system(size: 14))
+                            .padding(.vertical, 4)
                     }
                     .buttonStyle(.plain)
                 }
+            } header: {
+                Text("Recent Projects")
+                    .font(Theme.subHeaderFont)
+                    .foregroundStyle(Theme.copper)
+                    .padding(.top, 8)
             }
         }
         .listStyle(.sidebar)
         .navigationTitle("Custos Librarius")
+        .tint(Theme.copper)
         .toolbar {
             ToolbarItem {
                 Button {

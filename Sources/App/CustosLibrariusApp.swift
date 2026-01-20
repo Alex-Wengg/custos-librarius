@@ -22,11 +22,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 struct CustosLibrariusApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var appState = AppState()
+    @AppStorage("appTheme") private var appTheme = "dark"
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
+                .tint(Theme.copper)
+                .preferredColorScheme(appTheme == "light" ? .light : .dark)
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified(showsTitle: true))
