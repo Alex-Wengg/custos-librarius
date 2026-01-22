@@ -615,6 +615,7 @@ actor DocumentProcessingService {
     // MARK: - Mid-Sentence Fix
 
     /// Fix chunks that start mid-sentence by merging preceding context
+    /// Uses Apple's NLTokenizer for accurate sentence boundary detection
     /// Returns: (fixedChunks, mergedCount, markedCount)
     private func fixMidSentenceChunks(_ chunks: [SemanticChunk]) -> (chunks: [SemanticChunk], merged: Int, marked: Int) {
         var result: [SemanticChunk] = []
@@ -625,9 +626,16 @@ actor DocumentProcessingService {
             var text = chunk.text.trimmingCharacters(in: .whitespacesAndNewlines)
             var needsFix = startsMidSentence(text)
 
-            // Step 1: If starts mid-sentence and has preceding context, merge it
+            // Step 1: If starts mid-sentence and has preceding context that ends mid-sentence, merge
             if needsFix, let preceding = chunk.precedingContext?.trimmingCharacters(in: .whitespacesAndNewlines), !preceding.isEmpty {
-                text = preceding + " " + text
+                // Only merge if preceding context ends mid-sentence (incomplete)
+                // This connects split sentences properly
+                if endsMidSentence(preceding) {
+                    text = preceding + " " + text
+                } else {
+                    // Preceding ends with complete sentence - just prepend for context
+                    text = preceding + " " + text
+                }
                 // Normalize whitespace
                 text = text.replacingOccurrences(of: "  ", with: " ")
                 text = text.replacingOccurrences(of: "\n ", with: "\n")
@@ -641,6 +649,9 @@ actor DocumentProcessingService {
                 markedCount += 1
             }
 
+            // Recalculate sentence count with NLTokenizer
+            let newSentenceCount = countSentences(text)
+
             // Create updated chunk
             let updatedChunk = SemanticChunk(
                 id: chunk.id,
@@ -651,7 +662,7 @@ actor DocumentProcessingService {
                 chapter: chunk.chapter,
                 startIndex: chunk.startIndex,
                 endIndex: chunk.endIndex,
-                sentenceCount: chunk.sentenceCount,
+                sentenceCount: newSentenceCount,
                 wordCount: text.split(separator: " ").count,
                 precedingContext: chunk.precedingContext,
                 followingContext: chunk.followingContext
@@ -660,23 +671,77 @@ actor DocumentProcessingService {
         }
 
         if mergedCount > 0 || markedCount > 0 {
-            print("Mid-sentence fix: merged \(mergedCount) chunks, marked \(markedCount) with [...]")
+            print("Mid-sentence fix (NLTokenizer): merged \(mergedCount) chunks, marked \(markedCount) with [...]")
         }
 
         return (result, mergedCount, markedCount)
     }
 
-    /// Check if text starts mid-sentence
+    /// Check if text starts mid-sentence using Apple's NLTokenizer
     private func startsMidSentence(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
-        // Starts with lowercase letter
+        // Quick check: starts with lowercase letter (definite mid-sentence)
         if let first = trimmed.first, first.isLowercase {
             return true
         }
 
+        // Use NLTokenizer to check if text starts at a sentence boundary
+        // If the first sentence doesn't start at index 0, we're mid-sentence
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = trimmed
+
+        var firstSentenceStart: String.Index?
+        tokenizer.enumerateTokens(in: trimmed.startIndex..<trimmed.endIndex) { range, _ in
+            firstSentenceStart = range.lowerBound
+            return false // Stop after first sentence
+        }
+
+        // If no sentence found or first sentence doesn't start at beginning
+        guard let start = firstSentenceStart else { return true }
+
+        // Check if there's significant content before the first detected sentence
+        if start != trimmed.startIndex {
+            let prefix = String(trimmed[trimmed.startIndex..<start]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !prefix.isEmpty && prefix.count > 2 {
+                return true
+            }
+        }
+
         return false
+    }
+
+    /// Check if text ends mid-sentence (doesn't end with sentence-ending punctuation)
+    private func endsMidSentence(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+
+        // Check last character for sentence-ending punctuation
+        let sentenceEnders = ".!?\"\'"
+        let curlyQuotes = "\u{201C}\u{201D}\u{2018}\u{2019}" // ""''
+        let allEnders = sentenceEnders + curlyQuotes
+
+        if let last = trimmed.last, allEnders.contains(last) {
+            return false
+        }
+
+        // Use NLTokenizer to verify - check if last sentence ends at text end
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = trimmed
+
+        var lastSentenceEnd: String.Index?
+        tokenizer.enumerateTokens(in: trimmed.startIndex..<trimmed.endIndex) { range, _ in
+            lastSentenceEnd = range.upperBound
+            return true // Continue to get last sentence
+        }
+
+        // If last sentence doesn't end at text end, we're mid-sentence
+        if let end = lastSentenceEnd {
+            return end != trimmed.endIndex
+        }
+
+        return true
     }
 
     // MARK: - Chunk Merging
