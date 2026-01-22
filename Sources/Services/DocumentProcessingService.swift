@@ -134,30 +134,32 @@ actor DocumentProcessingService {
             stats.totalPages += elements.compactMap { $0.page }.max() ?? 1
         }
 
-        // Step 1: Merge small chunks
-        onProgress?("Merging small chunks...")
+        // Step 1: Merge small chunks into larger ones for better summarization
+        onProgress?("Merging chunks for processing...")
         var mergedChunks = mergeSmallChunks(allChunks)
 
-        // Step 2: Filter chunks (heuristic or AI-based)
+        // Step 2: Process chunks (AI summarization or heuristic filtering)
         let beforeCount = mergedChunks.count
         if enableAIClassification, let chat = chatService {
-            onProgress?("AI classification pass...")
-            mergedChunks = try await classifyAndFilterChunks(mergedChunks, chatService: chat, onProgress: onProgress)
+            // AI mode: Summarize chunks with Qwen for clean, self-contained text
+            onProgress?("Summarizing chunks with AI...")
+            mergedChunks = try await summarizeChunks(mergedChunks, chatService: chat, onProgress: onProgress)
         } else {
+            // Fast mode: Heuristic filtering + sentence fix
             onProgress?("Filtering non-content chunks...")
             mergedChunks = heuristicFilterChunks(mergedChunks)
+
+            // Add context overlap for fast mode
+            mergedChunks = addContextOverlap(to: mergedChunks)
+
+            // Fix mid-sentence chunks (only needed for fast mode)
+            onProgress?("Fixing mid-sentence chunks...")
+            let midSentenceResult = fixMidSentenceChunks(mergedChunks)
+            mergedChunks = midSentenceResult.chunks
+            stats.chunksMergedContext = midSentenceResult.merged
+            stats.chunksMarkedContinuation = midSentenceResult.marked
         }
         stats.chunksFiltered = beforeCount - mergedChunks.count
-
-        // Step 3: Re-add context overlap after filtering
-        mergedChunks = addContextOverlap(to: mergedChunks)
-
-        // Step 4: Fix mid-sentence chunks
-        onProgress?("Fixing mid-sentence chunks...")
-        let midSentenceResult = fixMidSentenceChunks(mergedChunks)
-        mergedChunks = midSentenceResult.chunks
-        stats.chunksMergedContext = midSentenceResult.merged
-        stats.chunksMarkedContinuation = midSentenceResult.marked
 
         // Calculate stats
         stats.totalChunks = mergedChunks.count
@@ -859,7 +861,161 @@ actor DocumentProcessingService {
         }
     }
 
-    // MARK: - AI Classification
+    // MARK: - AI Summarization
+
+    /// Summarize chunks using Qwen for clean, self-contained text
+    /// This replaces broken sentences, removes noise, and creates quiz-ready content
+    private func summarizeChunks(_ chunks: [SemanticChunk], chatService: ChatService, onProgress: ((String) -> Void)?) async throws -> [SemanticChunk] {
+        var summarizedChunks: [SemanticChunk] = []
+        var debugLog: [String] = []
+
+        for (index, chunk) in chunks.enumerated() {
+            onProgress?("Summarizing chunk \(index + 1)/\(chunks.count)...")
+
+            // Quick heuristic pre-filter (skip obvious non-content)
+            if isObviouslyNonContent(chunk.text) {
+                debugLog.append("[\(index)] SKIPPED (non-content): \(chunk.id)")
+                continue
+            }
+
+            // Skip very short chunks
+            if chunk.wordCount < 50 {
+                debugLog.append("[\(index)] SKIPPED (too short): \(chunk.id)")
+                continue
+            }
+
+            // Summarize with Qwen
+            let result = try await summarizeChunk(chunk, chatService: chatService)
+
+            // Skip if AI determined it's not useful content
+            if result.summary.isEmpty || result.contentType != "content" {
+                debugLog.append("[\(index)] FILTERED by AI: \(chunk.id) (type: \(result.contentType))")
+                continue
+            }
+
+            // Create new chunk with summarized text
+            let summarizedChunk = SemanticChunk(
+                id: chunk.id,
+                text: result.summary,
+                source: chunk.source,
+                page: chunk.page,
+                section: result.section ?? chunk.section,
+                chapter: result.chapter ?? chunk.chapter,
+                startIndex: chunk.startIndex,
+                endIndex: chunk.endIndex,
+                sentenceCount: countSentences(result.summary),
+                wordCount: result.summary.split(separator: " ").count,
+                precedingContext: nil,  // Not needed for summaries
+                followingContext: nil
+            )
+            summarizedChunks.append(summarizedChunk)
+            debugLog.append("[\(index)] SUMMARIZED: \(chunk.id) (\(chunk.wordCount) → \(summarizedChunk.wordCount) words)")
+        }
+
+        // Print debug log
+        print("=== CHUNK SUMMARIZATION DEBUG ===")
+        for line in debugLog.suffix(20) {  // Last 20 entries
+            print(line)
+        }
+        print("=== END DEBUG (\(summarizedChunks.count)/\(chunks.count) kept) ===")
+
+        // Save debug log
+        let debugText = debugLog.joined(separator: "\n")
+        let debugPath = projectPath.appendingPathComponent("data/summarization_debug.txt")
+        try? debugText.write(to: debugPath, atomically: true, encoding: .utf8)
+
+        return summarizedChunks
+    }
+
+    /// Result from summarizing a single chunk
+    private struct SummarizationResult {
+        let summary: String
+        let contentType: String
+        let chapter: String?
+        let section: String?
+    }
+
+    /// Summarize a single chunk using Qwen
+    private func summarizeChunk(_ chunk: SemanticChunk, chatService: ChatService) async throws -> SummarizationResult {
+        let prompt = """
+        Analyze and summarize this text from a book. Respond with ONLY valid JSON.
+
+        Text:
+        \(String(chunk.text.prefix(1500)))
+
+        Instructions:
+        1. If this is table of contents, index, copyright, or bibliography, set type to that category
+        2. If this is main content, summarize it in 2-3 paragraphs with complete sentences
+        3. Keep all key facts, names, dates, concepts, and arguments
+        4. Write clear, self-contained text that doesn't start mid-sentence
+        5. Extract chapter and section names if visible
+
+        Respond with this exact JSON format:
+        {"type": "content|toc|index|copyright|bibliography", "summary": "your summary here or empty if not content", "chapter": "chapter name or null", "section": "section name or null"}
+
+        JSON:
+        """
+
+        let response = try await chatService.generate(query: prompt, context: [])
+        return parseSummarizationResponse(response, fallbackChunk: chunk)
+    }
+
+    /// Parse the JSON response from summarization
+    private func parseSummarizationResponse(_ response: String, fallbackChunk: SemanticChunk) -> SummarizationResult {
+        // Clean up response
+        let cleaned = response
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Find JSON object
+        guard let start = cleaned.firstIndex(of: "{"),
+              let end = cleaned.lastIndex(of: "}") else {
+            // Fallback: return original text
+            return SummarizationResult(
+                summary: fallbackChunk.text,
+                contentType: "content",
+                chapter: fallbackChunk.chapter,
+                section: fallbackChunk.section
+            )
+        }
+
+        let jsonString = String(cleaned[start...end])
+
+        guard let data = jsonString.data(using: .utf8) else {
+            return SummarizationResult(
+                summary: fallbackChunk.text,
+                contentType: "content",
+                chapter: fallbackChunk.chapter,
+                section: fallbackChunk.section
+            )
+        }
+
+        do {
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+            let contentType = json?["type"] as? String ?? "content"
+            let summary = json?["summary"] as? String ?? ""
+            let chapter = json?["chapter"] as? String
+            let section = json?["section"] as? String
+
+            return SummarizationResult(
+                summary: summary.isEmpty ? fallbackChunk.text : summary,
+                contentType: contentType.lowercased(),
+                chapter: chapter != "null" ? chapter : nil,
+                section: section != "null" ? section : nil
+            )
+        } catch {
+            return SummarizationResult(
+                summary: fallbackChunk.text,
+                contentType: "content",
+                chapter: fallbackChunk.chapter,
+                section: fallbackChunk.section
+            )
+        }
+    }
+
+    // MARK: - AI Classification (Legacy)
 
     private func classifyAndFilterChunks(_ chunks: [SemanticChunk], chatService: ChatService, onProgress: ((String) -> Void)?) async throws -> [SemanticChunk] {
         var filteredChunks: [SemanticChunk] = []
