@@ -117,7 +117,7 @@ struct SearchView: View {
                 // Check if no documents are indexed (empty results on first search)
                 if results.isEmpty {
                     // Could be no matching results or no documents indexed
-                    let chunksPath = appState.currentProject?.path.appendingPathComponent("data/chunks.json")
+                    let chunksPath = appState.currentProject?.path.appendingPathComponent("data/chunks_v2.json")
                     if let path = chunksPath, !FileManager.default.fileExists(atPath: path.path) {
                         noDocumentsIndexed = true
                     }

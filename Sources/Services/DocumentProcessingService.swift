@@ -1193,80 +1193,6 @@ actor DocumentProcessingService {
         }
     }
 
-    // MARK: - AI Classification (Legacy)
-
-    private func classifyAndFilterChunks(_ chunks: [SemanticChunk], chatService: ChatService, onProgress: ((String) -> Void)?) async throws -> [SemanticChunk] {
-        var filteredChunks: [SemanticChunk] = []
-        var debugLog: [String] = []
-
-        for (index, chunk) in chunks.enumerated() {
-            onProgress?("Classifying chunk \(index + 1)/\(chunks.count)...")
-
-            // Quick heuristic pre-filter (skip only very obvious non-content)
-            if isObviouslyNonContent(chunk.text) {
-                debugLog.append("[\(index)] HEURISTIC FILTER: \(chunk.id) - \(String(chunk.text.prefix(50)))...")
-                continue
-            }
-
-            // AI classification for ambiguous chunks
-            let classification = try await classifyChunk(chunk, chatService: chatService)
-
-            // Lowered threshold from 0.5 to 0.3 - keep more content
-            let dominated = classification.contentType == .content && classification.quality >= 0.3
-
-            if dominated {
-                // Update chunk with AI-extracted metadata OR text analysis fallback
-                var finalChapter = classification.chapter
-                var finalSection = classification.section
-
-                // Text analysis fallback if AI returned nil
-                if finalChapter == nil || isNumericOnly(finalChapter ?? "") {
-                    finalChapter = extractChapterFromText(chunk.text) ?? chunk.chapter
-                }
-                if finalSection == nil || isBadSection(finalSection ?? "") {
-                    finalSection = extractSectionFromText(chunk.text) ?? chunk.section
-                }
-
-                // Clean up bad metadata
-                finalChapter = cleanMetadata(finalChapter)
-                finalSection = cleanMetadata(finalSection)
-
-                let updatedChunk = SemanticChunk(
-                    id: chunk.id,
-                    text: chunk.text,
-                    source: chunk.source,
-                    page: chunk.page,
-                    section: finalSection,
-                    chapter: finalChapter,
-                    startIndex: chunk.startIndex,
-                    endIndex: chunk.endIndex,
-                    sentenceCount: chunk.sentenceCount,
-                    wordCount: chunk.wordCount,
-                    precedingContext: chunk.precedingContext,
-                    followingContext: chunk.followingContext
-                )
-                filteredChunks.append(updatedChunk)
-                debugLog.append("[\(index)] KEPT: \(chunk.id) (quality: \(classification.quality), type: \(classification.contentType))")
-            } else {
-                debugLog.append("[\(index)] AI FILTER: \(chunk.id) (quality: \(classification.quality), type: \(classification.contentType)) - \(String(chunk.text.prefix(50)))...")
-            }
-        }
-
-        // Print debug log
-        print("=== CHUNK CLASSIFICATION DEBUG ===")
-        for line in debugLog {
-            print(line)
-        }
-        print("=== END DEBUG (\(filteredChunks.count)/\(chunks.count) kept) ===")
-
-        // Also save to file for easy access
-        let debugText = debugLog.joined(separator: "\n")
-        let debugPath = projectPath.appendingPathComponent("data/classification_debug.txt")
-        try? debugText.write(to: debugPath, atomically: true, encoding: .utf8)
-
-        return filteredChunks
-    }
-
     private func isObviouslyNonContent(_ text: String) -> Bool {
         let lower = text.lowercased()
 
@@ -1594,67 +1520,17 @@ actor DocumentProcessingService {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
-        // Save new format
         let data = try encoder.encode(chunks)
         try data.write(to: dataDir.appendingPathComponent("chunks_v2.json"))
-
-        // Also save legacy format for compatibility
-        let legacyChunks = chunks.map { chunk -> [String: Any] in
-            [
-                "id": chunk.id,
-                "text": chunk.text,
-                "source": chunk.source,
-                "title": chunk.section ?? chunk.source,
-                "author": "Unknown",
-                "index": chunk.startIndex
-            ]
-        }
-        let legacyData = try JSONSerialization.data(withJSONObject: legacyChunks, options: .prettyPrinted)
-        try legacyData.write(to: dataDir.appendingPathComponent("chunks.json"))
     }
 
     func loadChunks() async throws -> [SemanticChunk] {
         let dataDir = projectPath.appendingPathComponent("data")
-        let v2Path = dataDir.appendingPathComponent("chunks_v2.json")
+        let chunksPath = dataDir.appendingPathComponent("chunks_v2.json")
 
-        if FileManager.default.fileExists(atPath: v2Path.path) {
-            let data = try Data(contentsOf: v2Path)
-            return try JSONDecoder().decode([SemanticChunk].self, from: data)
-        }
-
-        // Fall back to legacy format
-        let legacyPath = dataDir.appendingPathComponent("chunks.json")
-        let data = try Data(contentsOf: legacyPath)
-        let legacy = try JSONDecoder().decode([LegacyChunk].self, from: data)
-
-        return legacy.enumerated().map { index, chunk in
-            SemanticChunk(
-                id: chunk.id,
-                text: chunk.text,
-                source: chunk.source,
-                page: nil,
-                section: chunk.title,
-                chapter: nil,
-                startIndex: index,
-                endIndex: index,
-                sentenceCount: 0,
-                wordCount: chunk.text.split(separator: " ").count,
-                precedingContext: nil,
-                followingContext: nil
-            )
-        }
+        let data = try Data(contentsOf: chunksPath)
+        return try JSONDecoder().decode([SemanticChunk].self, from: data)
     }
-}
-
-// MARK: - Legacy Support
-
-private struct LegacyChunk: Codable {
-    let id: String
-    let text: String
-    let source: String
-    let title: String
-    let author: String
-    let index: Int
 }
 
 // MARK: - Errors

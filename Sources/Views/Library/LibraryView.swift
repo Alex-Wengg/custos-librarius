@@ -168,28 +168,14 @@ struct DocumentsSection: View {
         guard let project = appState.currentProject else { return }
         let dataDir = project.path.appendingPathComponent("data")
 
-        // Clean up chunks.json (legacy format)
-        let chunksPath = dataDir.appendingPathComponent("chunks.json")
+        let chunksPath = dataDir.appendingPathComponent("chunks_v2.json")
         if let data = try? Data(contentsOf: chunksPath),
-           var chunks = try? JSONDecoder().decode([ChunkData].self, from: data) {
-            let beforeCount = chunks.count
-            chunks.removeAll { $0.source == doc.name }
-            if chunks.count != beforeCount {
-                if let newData = try? JSONEncoder().encode(chunks) {
-                    try? newData.write(to: chunksPath)
-                }
-            }
-        }
-
-        // Clean up chunks_v2.json (new format)
-        let chunksV2Path = dataDir.appendingPathComponent("chunks_v2.json")
-        if let data = try? Data(contentsOf: chunksV2Path),
            var chunks = try? JSONDecoder().decode([SemanticChunk].self, from: data) {
             let beforeCount = chunks.count
             chunks.removeAll { $0.source == doc.name }
             if chunks.count != beforeCount {
                 if let newData = try? JSONEncoder().encode(chunks) {
-                    try? newData.write(to: chunksV2Path)
+                    try? newData.write(to: chunksPath)
                 }
                 indexingStatus = "Removed \(beforeCount - chunks.count) chunks for \(doc.name)"
             }
@@ -496,7 +482,7 @@ struct TrainingSection: View {
         Task { @MainActor in
             do {
                 let dataDir = project.path.appendingPathComponent("data")
-                let chunksPath = dataDir.appendingPathComponent("chunks.json")
+                let chunksPath = dataDir.appendingPathComponent("chunks_v2.json")
 
                 // Load chunks
                 guard FileManager.default.fileExists(atPath: chunksPath.path) else {
@@ -506,7 +492,7 @@ struct TrainingSection: View {
                 }
 
                 let chunksData = try Data(contentsOf: chunksPath)
-                let chunks = try JSONDecoder().decode([ChunkData].self, from: chunksData)
+                let chunks = try JSONDecoder().decode([SemanticChunk].self, from: chunksData)
 
                 guard !chunks.isEmpty else {
                     status = "No content found in documents."

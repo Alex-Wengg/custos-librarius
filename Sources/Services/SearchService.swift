@@ -4,7 +4,6 @@ import Foundation
 actor SearchService {
     private let projectPath: URL
     private var chunks: [SemanticChunk] = []
-    private var legacyChunks: [ChunkData] = []
     private var isLoaded = false
 
     // Embedding service for semantic search
@@ -34,24 +33,11 @@ actor SearchService {
     }
 
     private func loadIndex() async throws {
-        // Try new format first
-        let v2Path = projectPath.appendingPathComponent("data/chunks_v2.json")
-        if FileManager.default.fileExists(atPath: v2Path.path) {
-            let data = try Data(contentsOf: v2Path)
-            chunks = try JSONDecoder().decode([SemanticChunk].self, from: data)
-            // Also populate legacy for compatibility
-            legacyChunks = chunks.map { chunk in
-                ChunkData(id: chunk.id, text: chunk.text, source: chunk.source, title: chunk.section ?? chunk.source, author: "Unknown", index: chunk.startIndex)
-            }
-            return
-        }
+        let chunksPath = projectPath.appendingPathComponent("data/chunks_v2.json")
+        guard FileManager.default.fileExists(atPath: chunksPath.path) else { return }
 
-        // Fall back to legacy format
-        let chunksPath = projectPath.appendingPathComponent("data/chunks.json")
-        if FileManager.default.fileExists(atPath: chunksPath.path) {
-            let data = try Data(contentsOf: chunksPath)
-            legacyChunks = try JSONDecoder().decode([ChunkData].self, from: data)
-        }
+        let data = try Data(contentsOf: chunksPath)
+        chunks = try JSONDecoder().decode([SemanticChunk].self, from: data)
     }
 
     // MARK: - Embedding Index
@@ -81,7 +67,7 @@ actor SearchService {
             isLoaded = true
         }
 
-        let documents = !chunks.isEmpty ? chunks.map { $0.text } : legacyChunks.map { $0.text }
+        let documents = chunks.map { $0.text }
         guard !documents.isEmpty else { return [] }
 
         // BM25 scores
@@ -116,27 +102,17 @@ actor SearchService {
         let topResults = hybridScores.prefix(topK)
 
         return topResults.map { item in
-            if !chunks.isEmpty {
-                let chunk = chunks[item.index]
-                return SearchResult(
-                    text: chunk.text,
-                    source: chunk.source,
-                    score: item.score,
-                    metadata: SearchMetadata(
-                        page: chunk.page,
-                        section: chunk.section,
-                        chapter: chunk.chapter
-                    )
+            let chunk = chunks[item.index]
+            return SearchResult(
+                text: chunk.text,
+                source: chunk.source,
+                score: item.score,
+                metadata: SearchMetadata(
+                    page: chunk.page,
+                    section: chunk.section,
+                    chapter: chunk.chapter
                 )
-            } else {
-                let chunk = legacyChunks[item.index]
-                return SearchResult(
-                    text: chunk.text,
-                    source: chunk.source,
-                    score: item.score,
-                    metadata: nil
-                )
-            }
+            )
         }
     }
 
@@ -146,10 +122,7 @@ actor SearchService {
     }
 
     private func getChunkIndex(id: String) -> Int? {
-        if !chunks.isEmpty {
-            return chunks.firstIndex { $0.id == id }
-        }
-        return legacyChunks.firstIndex { $0.id == id }
+        return chunks.firstIndex { $0.id == id }
     }
 
     // MARK: - BM25

@@ -235,13 +235,13 @@ actor ChatService {
         }
 
         // Load chunks
-        let chunksPath = projectPath.appendingPathComponent("data/chunks.json")
+        let chunksPath = projectPath.appendingPathComponent("data/chunks_v2.json")
         guard FileManager.default.fileExists(atPath: chunksPath.path) else {
             return []
         }
 
         let data = try Data(contentsOf: chunksPath)
-        let chunks = try JSONDecoder().decode([ChunkData].self, from: data)
+        let chunks = try JSONDecoder().decode([SemanticChunk].self, from: data)
 
         guard !chunks.isEmpty else { return [] }
 
@@ -298,13 +298,13 @@ actor ChatService {
         }
 
         // Load chunks
-        let chunksPath = projectPath.appendingPathComponent("data/chunks.json")
+        let chunksPath = projectPath.appendingPathComponent("data/chunks_v2.json")
         guard FileManager.default.fileExists(atPath: chunksPath.path) else {
             return []
         }
 
         let data = try Data(contentsOf: chunksPath)
-        var chunks = try JSONDecoder().decode([ChunkData].self, from: data)
+        var chunks = try JSONDecoder().decode([SemanticChunk].self, from: data)
 
         guard !chunks.isEmpty else { return [] }
 
@@ -428,7 +428,7 @@ actor ChatService {
 
     private func generateQuestionCandidates(
         container: ModelContainer,
-        chunk: ChunkData,
+        chunk: SemanticChunk,
         fewShotExamples: String,
         chainOfThought: String,
         numCandidates: Int
@@ -535,7 +535,7 @@ actor ChatService {
 
     // MARK: - Candidate Selection & Validation
 
-    private func selectBestCandidate(candidates: [QuizQuestion], chunk: ChunkData) -> QuizQuestion? {
+    private func selectBestCandidate(candidates: [QuizQuestion], chunk: SemanticChunk) -> QuizQuestion? {
         guard !candidates.isEmpty else { return nil }
 
         // Filter candidates that pass validation
@@ -727,9 +727,9 @@ actor ChatService {
         onProgress?("Generated \(questions.count) validated questions")
 
         // Load chunks for context
-        let chunksPath = projectPath.appendingPathComponent("data/chunks.json")
+        let chunksPath = projectPath.appendingPathComponent("data/chunks_v2.json")
         let data = try Data(contentsOf: chunksPath)
-        let chunks = try JSONDecoder().decode([ChunkData].self, from: data)
+        let chunks = try JSONDecoder().decode([SemanticChunk].self, from: data)
 
         // Export to training format
         let generator = QuizTrainingDataGenerator(projectPath: projectPath)
@@ -769,9 +769,9 @@ actor ChatService {
         }
 
         // Load chunks
-        let chunksPath = projectPath.appendingPathComponent("data/chunks.json")
+        let chunksPath = projectPath.appendingPathComponent("data/chunks_v2.json")
         let data = try Data(contentsOf: chunksPath)
-        let chunks = try JSONDecoder().decode([ChunkData].self, from: data)
+        let chunks = try JSONDecoder().decode([SemanticChunk].self, from: data)
 
         // Export all questions
         let generator = QuizTrainingDataGenerator(projectPath: projectPath)
@@ -799,7 +799,7 @@ actor ChatService {
 
     private func generateWithRetry(
         container: ModelContainer,
-        chunk: ChunkData,
+        chunk: SemanticChunk,
         fewShotExamples: String,
         chainOfThought: String,
         maxRetries: Int = 3
@@ -831,13 +831,13 @@ actor ChatService {
     }
 
     func getAvailableSources() throws -> [String] {
-        let chunksPath = projectPath.appendingPathComponent("data/chunks.json")
+        let chunksPath = projectPath.appendingPathComponent("data/chunks_v2.json")
         guard FileManager.default.fileExists(atPath: chunksPath.path) else {
             return []
         }
 
         let data = try Data(contentsOf: chunksPath)
-        let chunks = try JSONDecoder().decode([ChunkData].self, from: data)
+        let chunks = try JSONDecoder().decode([SemanticChunk].self, from: data)
 
         return Array(Set(chunks.map { $0.source })).sorted()
     }
@@ -849,13 +849,13 @@ actor ChatService {
             throw ServiceError.modelNotLoaded
         }
 
-        let chunksPath = projectPath.appendingPathComponent("data/chunks.json")
+        let chunksPath = projectPath.appendingPathComponent("data/chunks_v2.json")
         guard FileManager.default.fileExists(atPath: chunksPath.path) else {
             return []
         }
 
         let data = try Data(contentsOf: chunksPath)
-        var chunks = try JSONDecoder().decode([ChunkData].self, from: data)
+        var chunks = try JSONDecoder().decode([SemanticChunk].self, from: data)
 
         guard !chunks.isEmpty else { return [] }
 
@@ -1022,15 +1022,6 @@ actor ChatService {
     }
 }
 
-struct ChunkData: Codable {
-    let id: String
-    let text: String
-    let source: String
-    let title: String
-    let author: String
-    let index: Int
-}
-
 struct QuizQuestion: Identifiable {
     let id = UUID()
     let question: String
@@ -1128,7 +1119,7 @@ class QuizTrainingDataGenerator {
     /// Export validated questions as training data for fine-tuning
     func exportTrainingData(
         questions: [QuizQuestion],
-        chunks: [ChunkData],
+        chunks: [SemanticChunk],
         outputPath: URL
     ) throws -> Int {
         var trainingLines: [String] = []
@@ -1151,7 +1142,7 @@ class QuizTrainingDataGenerator {
         return trainingLines.count
     }
 
-    private func createTrainingExample(question: QuizQuestion, chunk: ChunkData) -> String {
+    private func createTrainingExample(question: QuizQuestion, chunk: SemanticChunk) -> String {
         // Format as instruction-following conversation
         let systemPrompt = "You create educational multiple choice questions. Output valid JSON only."
 
