@@ -1,5 +1,43 @@
 import SwiftUI
 
+// MARK: - Model Definitions
+
+struct MLXModel: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let size: String
+    let description: String
+    let category: ModelCategory
+
+    enum ModelCategory: String, CaseIterable {
+        case small = "Small (1-3B)"
+        case medium = "Medium (7-8B)"
+        case large = "Large (14B+)"
+    }
+}
+
+let availableModels: [MLXModel] = [
+    // Small
+    MLXModel(id: "mlx-community/Qwen2.5-1.5B-Instruct-4bit", name: "Qwen 2.5 1.5B", size: "~1GB", description: "Fast, low RAM", category: .small),
+    MLXModel(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", name: "Qwen 2.5 3B", size: "~2GB", description: "Balanced speed/quality", category: .small),
+    MLXModel(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", name: "Llama 3.2 3B", size: "~2GB", description: "Meta, good reasoning", category: .small),
+
+    // Medium
+    MLXModel(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", name: "Qwen 2.5 7B", size: "~4GB", description: "Recommended - best quality/speed", category: .medium),
+    MLXModel(id: "mlx-community/Llama-3.1-8B-Instruct-4bit", name: "Llama 3.1 8B", size: "~4.5GB", description: "Meta, strong all-around", category: .medium),
+
+    // Large
+    MLXModel(id: "mlx-community/Qwen2.5-14B-Instruct-4bit", name: "Qwen 2.5 14B", size: "~8GB", description: "Excellent reasoning", category: .large),
+    MLXModel(id: "mlx-community/Qwen2.5-32B-Instruct-4bit", name: "Qwen 2.5 32B", size: "~18GB", description: "Top tier (needs 32GB+ RAM)", category: .large),
+]
+
+let availableEmbeddingModels: [MLXModel] = [
+    MLXModel(id: "mlx-community/bge-small-en-v1.5-quantized-4bit", name: "BGE Small", size: "~50MB", description: "Fast, English only", category: .small),
+    MLXModel(id: "mlx-community/bge-base-en-v1.5-quantized-4bit", name: "BGE Base", size: "~100MB", description: "Better quality, English", category: .small),
+    MLXModel(id: "mlx-community/bge-large-en-v1.5-quantized-4bit", name: "BGE Large", size: "~300MB", description: "Best quality, English", category: .medium),
+    MLXModel(id: "mlx-community/bge-m3-4bit", name: "BGE M3", size: "~500MB", description: "Multilingual", category: .medium),
+]
+
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @AppStorage("modelId") private var modelId = "mlx-community/Qwen2.5-7B-Instruct-4bit"
@@ -7,6 +45,12 @@ struct SettingsView: View {
     @AppStorage("maxTokens") private var maxTokens = 512
     @AppStorage("temperature") private var temperature = 0.7
     @AppStorage("appTheme") private var appTheme = "dark"
+    @AppStorage("chunkSize") private var chunkSize = 400
+
+    @State private var showLLMTests = false
+    @State private var isReloadingModel = false
+    @State private var customModelId = ""
+    @State private var showCustomModel = false
 
     var body: some View {
         Form {
@@ -18,16 +62,111 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
             }
 
-            Section("Models") {
-                TextField("LLM Model:", text: $modelId)
-                    .textFieldStyle(.roundedBorder)
+            Section {
+                // LLM Model Picker
+                Picker("LLM Model:", selection: $modelId) {
+                    ForEach(MLXModel.ModelCategory.allCases, id: \.self) { category in
+                        let models = availableModels.filter { $0.category == category }
+                        if !models.isEmpty {
+                            Section(header: Text(category.rawValue)) {
+                                ForEach(models) { model in
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(model.name)
+                                            Text(model.description)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
+                                        Text(model.size)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .tag(model.id)
+                                }
+                            }
+                        }
+                    }
+                }
+                .pickerStyle(.menu)
 
-                TextField("Embedding Model:", text: $embeddingModelId)
-                    .textFieldStyle(.roundedBorder)
+                // Current model info
+                if let currentModel = availableModels.first(where: { $0.id == modelId }) {
+                    HStack {
+                        Label(currentModel.description, systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(currentModel.size)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
 
-                Text("Models are downloaded from HuggingFace on first use")
+                // Custom model option
+                DisclosureGroup("Custom Model", isExpanded: $showCustomModel) {
+                    HStack {
+                        TextField("mlx-community/model-name", text: $customModelId)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Use") {
+                            if !customModelId.isEmpty {
+                                modelId = customModelId
+                            }
+                        }
+                        .disabled(customModelId.isEmpty)
+                    }
+                    Text("Enter any model ID from huggingface.co/mlx-community")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                // Reload button
+                HStack {
+                    Button {
+                        reloadModel()
+                    } label: {
+                        if isReloadingModel {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Reload Model", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(isReloadingModel || appState.currentProject == nil)
+
+                    Spacer()
+
+                    if appState.modelLoaded {
+                        Label("Loaded", systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    } else {
+                        Label("Not loaded", systemImage: "circle")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            } header: {
+                Text("Language Model")
+            } footer: {
+                Text("Models are downloaded from HuggingFace on first use (~2-8 GB)")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+            }
+
+            Section("Embedding Model") {
+                Picker("Model:", selection: $embeddingModelId) {
+                    ForEach(availableEmbeddingModels) { model in
+                        HStack {
+                            Text(model.name)
+                            Spacer()
+                            Text(model.size)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .tag(model.id)
+                    }
+                }
+                .pickerStyle(.menu)
             }
 
             Section("Generation") {
@@ -47,9 +186,24 @@ struct SettingsView: View {
                 }
             }
 
+            Section {
+                HStack {
+                    Text("Chunk Size:")
+                    Slider(value: .init(get: { Double(chunkSize) }, set: { chunkSize = Int($0) }),
+                           in: 100...800, step: 50)
+                    Text("\(chunkSize)")
+                        .frame(width: 50)
+                }
+            } header: {
+                Text("Document Processing")
+            } footer: {
+                Text("Target words per chunk. Smaller = more precise search, larger = more context")
+                    .font(.caption)
+            }
+
             Section("About") {
                 HStack {
-                    Text("Librarian")
+                    Text("Custos Librarius")
                         .fontWeight(.bold)
                     Spacer()
                     Text("v1.0.0")
@@ -76,14 +230,45 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .frame(width: 500, height: 400)
+        .frame(width: 550, height: 600)
         .sheet(isPresented: $showLLMTests) {
             LLMTestView()
                 .environmentObject(appState)
         }
     }
 
-    @State private var showLLMTests = false
+    func reloadModel() {
+        isReloadingModel = true
+
+        // Update project config
+        if let project = appState.currentProject {
+            let configPath = project.path.appendingPathComponent("librarian.json")
+            let config = ProjectConfig(
+                name: project.name,
+                model: modelId,
+                embeddingModel: embeddingModelId
+            )
+            if let data = try? JSONEncoder().encode(config) {
+                try? data.write(to: configPath)
+            }
+        }
+
+        // Reload
+        Task {
+            appState.modelLoaded = false
+            appState.chatService = nil
+
+            if let project = appState.currentProject {
+                appState.chatService = ChatService(projectPath: project.path)
+                try? await appState.chatService?.loadModel()
+                appState.modelLoaded = true
+            }
+
+            await MainActor.run {
+                isReloadingModel = false
+            }
+        }
+    }
 }
 
 struct NewProjectSheet: View {

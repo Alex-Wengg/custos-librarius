@@ -1,0 +1,42 @@
+[
+    {
+        "id": "chunk_001",
+        "text": "The Great Wall of China is one of the greatest wonders of the world. It was built over many centuries by different Chinese dynasties to protect the northern borders from various nomadic groups. The wall stretches approximately 13,171 miles (21,196 km) in total length.",
+        "source": "History of China",
+        "title": "History of China",
+        "author": "Historical Archives",
+        "index": 0
+    },
+    {
+        "id": "chunk_002",
+        "text": "The Silk Road was an ancient network of trade routes that connected the East and West. It was central to cultural, commercial, and technological exchange between traders, merchants, pilgrims, monks, soldiers, and nomads from China, India, Persia, and Mediterranean countries for about 1,500 years.",
+        "source": "History of China",
+        "title": "History of China",
+        "author": "Historical Archives",
+        "index": 1
+    },
+    {
+        "id": "chunk_003",
+        "text": "Machine learning is a subset of artificial intelligence that enables systems to learn and improve from experience without being explicitly programmed. It focuses on developing algorithms that can access data and use it to learn for themselves.",
+        "source": "Introduction to AI",
+        "title": "Introduction to AI",
+        "author": "Tech Guide",
+        "index": 0
+    },
+    {
+        "id": "chunk_004",
+        "text": "Neural networks are computing systems inspired by biological neural networks in animal brains. They consist of interconnected nodes or neurons that process information using connectionist approaches to computation. Deep learning uses multiple layers of neural networks.",
+        "source": "Introduction to AI",
+        "title": "Introduction to AI",
+        "author": "Tech Guide",
+        "index": 1
+    },
+    {
+        "id": "chunk_005",
+        "text": "Swift is a powerful and intuitive programming language developed by Apple for iOS, macOS, watchOS, and tvOS app development. It's designed to be safe, fast, and expressive, making it a popular choice for modern application development.",
+        "source": "Swift Programming",
+        "title": "Swift Programming",
+        "author": "Apple Developer",
+        "index": 0
+    }
+]

@@ -1,0 +1,46 @@
+[
+    {
+        "id": "flashset_001",
+        "name": "History Facts",
+        "cards": [
+            {
+                "id": "f001",
+                "question": "What is the total length of the Great Wall of China?",
+                "answer": "Approximately 13,171 miles (21,196 km)",
+                "source": "History of China"
+            },
+            {
+                "id": "f002",
+                "question": "What was the Silk Road?",
+                "answer": "An ancient network of trade routes connecting East and West for commercial, cultural, and technological exchange.",
+                "source": "History of China"
+            }
+        ],
+        "createdAt": "2024-01-15T10:00:00Z"
+    },
+    {
+        "id": "flashset_002",
+        "name": "AI Concepts",
+        "cards": [
+            {
+                "id": "f003",
+                "question": "What is machine learning?",
+                "answer": "A subset of AI that enables systems to learn and improve from experience without being explicitly programmed.",
+                "source": "Introduction to AI"
+            },
+            {
+                "id": "f004",
+                "question": "What are neural networks?",
+                "answer": "Computing systems inspired by biological neural networks, consisting of interconnected nodes that process information.",
+                "source": "Introduction to AI"
+            },
+            {
+                "id": "f005",
+                "question": "What is Swift?",
+                "answer": "A powerful programming language developed by Apple for iOS, macOS, watchOS, and tvOS app development.",
+                "source": "Swift Programming"
+            }
+        ],
+        "createdAt": "2024-01-16T10:00:00Z"
+    }
+]

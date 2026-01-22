@@ -20,6 +20,7 @@ class AppState: ObservableObject {
     // Chat
     @Published var messages: [ChatMessage] = []
     @Published var isGenerating = false
+    @Published var generationProgress: GenerationProgress?
 
     // Search
     @Published var searchQuery = ""
@@ -34,22 +35,50 @@ class AppState: ObservableObject {
     @Published var modelLoaded = false
     @Published var modelLoadingProgress: Double = 0
     @Published var embeddingModelLoaded = false
+    @Published var isLoadingModels = false
 
     // Services
     var chatService: ChatService?
     var searchService: SearchService?
     var trainingService: TrainingService?
 
+    // Persistence key for last project
+    private static let lastProjectPathKey = "lastProjectPath"
+
     init() {
         loadProjects()
-        // Auto-open default project if exists (deferred to avoid publishing during init)
+        // Auto-open last selected project (or default) on launch
+        Task { @MainActor in
+            await self.autoLoadLastProject()
+        }
+    }
+
+    /// Auto-load the last selected project on app launch
+    private func autoLoadLastProject() async {
+        // Try last selected project first
+        if let lastPath = UserDefaults.standard.string(forKey: Self.lastProjectPathKey) {
+            let url = URL(fileURLWithPath: lastPath)
+            let configPath = url.appendingPathComponent("librarian.json")
+            if FileManager.default.fileExists(atPath: configPath.path) {
+                self.currentProject = Project(name: url.lastPathComponent, path: url)
+                self.loadProjectData()
+                return
+            }
+        }
+
+        // Fall back to default project
         let defaultProject = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("LibrarianProjects/MyLibrary")
         if FileManager.default.fileExists(atPath: defaultProject.appendingPathComponent("librarian.json").path) {
-            Task { @MainActor in
-                self.currentProject = Project(name: "MyLibrary", path: defaultProject)
-                self.loadProjectData()
-            }
+            self.currentProject = Project(name: "MyLibrary", path: defaultProject)
+            self.loadProjectData()
+        }
+    }
+
+    /// Save the current project path for auto-load on next launch
+    private func saveLastProjectPath() {
+        if let path = currentProject?.path.path {
+            UserDefaults.standard.set(path, forKey: Self.lastProjectPathKey)
         }
     }
 
@@ -86,9 +115,17 @@ class AppState: ObservableObject {
             let configPath = url.appendingPathComponent("librarian.json")
             if FileManager.default.fileExists(atPath: configPath.path) {
                 currentProject = Project(name: url.lastPathComponent, path: url)
+                saveLastProjectPath()
                 loadProjectData()
             }
         }
+    }
+
+    /// Select a project programmatically
+    func selectProject(_ project: Project) {
+        currentProject = project
+        saveLastProjectPath()
+        loadProjectData()
     }
 
     func loadProjectData() {
@@ -124,18 +161,27 @@ class AppState: ObservableObject {
     }
 
     func loadModels() async {
+        guard !isLoadingModels else { return }
+        isLoadingModels = true
         modelLoadingProgress = 0.1
+
         do {
+            print("Loading LLM model...")
             try await chatService?.loadModel()
             modelLoaded = true
             modelLoadingProgress = 0.6
+            print("LLM model loaded")
 
+            print("Loading embedding model...")
             try await searchService?.loadEmbeddingModel()
             embeddingModelLoaded = true
             modelLoadingProgress = 1.0
+            print("Embedding model loaded")
         } catch {
             print("Error loading models: \(error)")
         }
+
+        isLoadingModels = false
     }
 }
 
@@ -196,12 +242,7 @@ struct ChatMessage: Identifiable {
     }
 }
 
-struct SearchResult: Identifiable {
-    let id = UUID()
-    let text: String
-    let source: String
-    let score: Float
-}
+// SearchResult is defined in SearchService.swift
 
 struct TrainingProgress {
     let iteration: Int
@@ -210,4 +251,28 @@ struct TrainingProgress {
     let validationLoss: Float?
     let bestLoss: Float
     let patienceCounter: Int
+}
+
+struct GenerationProgress {
+    let tokensGenerated: Int
+    let tokensPerSecond: Double
+    let elapsedTime: TimeInterval
+    let stage: GenerationStage
+
+    enum GenerationStage: String {
+        case preparing = "Preparing..."
+        case generating = "Generating"
+        case finishing = "Finishing..."
+    }
+
+    var displayText: String {
+        switch stage {
+        case .preparing:
+            return stage.rawValue
+        case .generating:
+            return "\(tokensGenerated) tokens • \(String(format: "%.1f", tokensPerSecond)) tok/s"
+        case .finishing:
+            return stage.rawValue
+        }
+    }
 }

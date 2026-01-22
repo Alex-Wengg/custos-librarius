@@ -32,9 +32,12 @@ struct LibraryView: View {
 
 struct DocumentsSection: View {
     @EnvironmentObject var appState: AppState
+    @AppStorage("chunkSize") private var chunkSize = 400
     @State private var isDropTargeted = false
     @State private var isIndexing = false
     @State private var indexingStatus = ""
+    @State private var showChunkInspector = false
+    @State private var processingStats: ProcessingStats?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,21 +48,50 @@ struct DocumentsSection: View {
 
                 Spacer()
 
+                // Inspect chunks button
+                Button {
+                    showChunkInspector = true
+                } label: {
+                    Label("Inspect Chunks", systemImage: "magnifyingglass")
+                }
+                .disabled(appState.currentProject == nil)
+
                 if !appState.documents.isEmpty {
+                    // Fast processing (heuristics only)
                     Button {
-                        indexDocuments()
+                        indexDocuments(useAI: false)
                     } label: {
                         if isIndexing {
                             HStack {
                                 ProgressView()
                                     .controlSize(.small)
-                                Text("Indexing...")
+                                Text("Processing...")
                             }
                         } else {
-                            Label("Index All", systemImage: "arrow.triangle.2.circlepath")
+                            Label("Process Fast", systemImage: "bolt")
                         }
                     }
                     .disabled(isIndexing)
+                    .help("Fast processing using heuristics (recommended)")
+
+                    // AI processing (slower but more accurate)
+                    Button {
+                        indexDocuments(useAI: true)
+                    } label: {
+                        Label("Process with AI", systemImage: "brain")
+                    }
+                    .disabled(isIndexing)
+                    .help("Slower but more accurate AI-based classification")
+
+                    // Delete selected document
+                    if let selected = appState.selectedDocument {
+                        Button(role: .destructive) {
+                            removeDocument(selected)
+                            appState.selectedDocument = nil
+                        } label: {
+                            Label("Remove", systemImage: "trash")
+                        }
+                    }
                 }
 
                 Button {
@@ -87,22 +119,28 @@ struct DocumentsSection: View {
                 }
             } else {
                 List(appState.documents, selection: $appState.selectedDocument) { doc in
-                    LibraryDocumentRow(document: doc)
-                        .contextMenu {
-                            Button("Show in Finder") {
-                                NSWorkspace.shared.selectFile(doc.path.path, inFileViewerRootedAtPath: "")
-                            }
-                            Divider()
-                            Button("Remove", role: .destructive) {
-                                removeDocument(doc)
-                            }
+                    LibraryDocumentRow(document: doc) {
+                        removeDocument(doc)
+                    }
+                    .contextMenu {
+                        Button("Show in Finder") {
+                            NSWorkspace.shared.selectFile(doc.path.path, inFileViewerRootedAtPath: "")
                         }
+                        Divider()
+                        Button("Remove", role: .destructive) {
+                            removeDocument(doc)
+                        }
+                    }
                 }
                 .listStyle(.inset)
             }
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers)
+        }
+        .sheet(isPresented: $showChunkInspector) {
+            ChunkInspectorView()
+                .environmentObject(appState)
         }
     }
 
@@ -122,8 +160,40 @@ struct DocumentsSection: View {
     }
 
     func removeDocument(_ doc: Document) {
+        // Remove the file
         try? FileManager.default.removeItem(at: doc.path)
         appState.documents.removeAll { $0.id == doc.id }
+
+        // Remove associated chunks from processed data
+        guard let project = appState.currentProject else { return }
+        let dataDir = project.path.appendingPathComponent("data")
+
+        // Clean up chunks.json (legacy format)
+        let chunksPath = dataDir.appendingPathComponent("chunks.json")
+        if let data = try? Data(contentsOf: chunksPath),
+           var chunks = try? JSONDecoder().decode([ChunkData].self, from: data) {
+            let beforeCount = chunks.count
+            chunks.removeAll { $0.source == doc.name }
+            if chunks.count != beforeCount {
+                if let newData = try? JSONEncoder().encode(chunks) {
+                    try? newData.write(to: chunksPath)
+                }
+            }
+        }
+
+        // Clean up chunks_v2.json (new format)
+        let chunksV2Path = dataDir.appendingPathComponent("chunks_v2.json")
+        if let data = try? Data(contentsOf: chunksV2Path),
+           var chunks = try? JSONDecoder().decode([SemanticChunk].self, from: data) {
+            let beforeCount = chunks.count
+            chunks.removeAll { $0.source == doc.name }
+            if chunks.count != beforeCount {
+                if let newData = try? JSONEncoder().encode(chunks) {
+                    try? newData.write(to: chunksV2Path)
+                }
+                indexingStatus = "Removed \(beforeCount - chunks.count) chunks for \(doc.name)"
+            }
+        }
     }
 
     func handleDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -140,52 +210,51 @@ struct DocumentsSection: View {
         return true
     }
 
-    func indexDocuments() {
+    func indexDocuments(useAI: Bool = false) {
         guard let project = appState.currentProject else { return }
         isIndexing = true
-        indexingStatus = "Starting..."
+        indexingStatus = useAI ? "Loading AI model..." : "Starting fast processing..."
 
         Task {
             do {
-                let docsDir = project.path.appendingPathComponent("documents")
-                let dataDir = project.path.appendingPathComponent("data")
+                let service: DocumentProcessingService
 
-                // Create data directory if needed
-                try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
-
-                var allChunks: [[String: Any]] = []
-                let files = try FileManager.default.contentsOfDirectory(at: docsDir, includingPropertiesForKeys: nil)
-
-                for (index, file) in files.enumerated() {
-                    await MainActor.run {
-                        indexingStatus = "Processing \(file.lastPathComponent)... (\(index + 1)/\(files.count))"
+                if useAI {
+                    // Load model if needed for AI classification
+                    if appState.chatService == nil {
+                        appState.chatService = ChatService(projectPath: project.path)
+                        try await appState.chatService?.loadModel()
                     }
+                    service = DocumentProcessingService(
+                        projectPath: project.path,
+                        chatService: appState.chatService,
+                        enableAIClassification: true,
+                        chunkSize: chunkSize
+                    )
+                } else {
+                    // Fast heuristic-based processing (no LLM)
+                    service = DocumentProcessingService(
+                        projectPath: project.path,
+                        chatService: nil,
+                        enableAIClassification: false,
+                        chunkSize: chunkSize
+                    )
+                }
 
-                    let ext = file.pathExtension.lowercased()
-                    guard ["txt", "md"].contains(ext) else { continue }
-
-                    // Read text file
-                    let content = try String(contentsOf: file, encoding: .utf8)
-                    let chunks = chunkText(content, source: file.lastPathComponent)
-
-                    for (i, chunk) in chunks.enumerated() {
-                        allChunks.append([
-                            "id": "\(file.deletingPathExtension().lastPathComponent)_\(i)",
-                            "text": chunk,
-                            "source": file.lastPathComponent,
-                            "title": file.deletingPathExtension().lastPathComponent,
-                            "author": "Unknown",
-                            "index": i
-                        ])
+                let result = try await service.processAllDocuments { status in
+                    Task { @MainActor in
+                        indexingStatus = status
                     }
                 }
 
-                // Save chunks
-                let chunksData = try JSONSerialization.data(withJSONObject: allChunks, options: .prettyPrinted)
-                try chunksData.write(to: dataDir.appendingPathComponent("chunks.json"))
-
                 await MainActor.run {
-                    indexingStatus = "Indexed \(allChunks.count) chunks from \(files.count) files"
+                    processingStats = result.stats
+                    var statusMsg = "Processed \(result.chunks.count) chunks from \(result.stats.totalDocuments) documents"
+                    statusMsg += " (avg \(Int(result.stats.avgChunkLength)) words/chunk)"
+                    if result.stats.chunksFiltered > 0 {
+                        statusMsg += " - \(result.stats.chunksFiltered) filtered by AI"
+                    }
+                    indexingStatus = statusMsg
                     isIndexing = false
                 }
             } catch {
@@ -196,25 +265,11 @@ struct DocumentsSection: View {
             }
         }
     }
-
-    func chunkText(_ text: String, source: String, chunkSize: Int = 500, overlap: Int = 50) -> [String] {
-        let words = text.split(separator: " ").map(String.init)
-        var chunks: [String] = []
-        var i = 0
-
-        while i < words.count {
-            let end = min(i + chunkSize, words.count)
-            let chunk = words[i..<end].joined(separator: " ")
-            chunks.append(chunk)
-            i += chunkSize - overlap
-        }
-
-        return chunks
-    }
 }
 
 struct LibraryDocumentRow: View {
     let document: Document
+    let onDelete: () -> Void
 
     var body: some View {
         HStack {
@@ -232,6 +287,17 @@ struct LibraryDocumentRow: View {
                         .foregroundColor(.secondary)
                 }
             }
+
+            Spacer()
+
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundColor(.red)
+            }
+            .buttonStyle(.plain)
+            .help("Remove document")
         }
         .padding(.vertical, 4)
     }

@@ -25,9 +25,16 @@ struct ChatView: View {
                             HStack(spacing: 12) {
                                 ProgressView()
                                     .controlSize(.small)
-                                Text("Thinking...")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
+                                if let progress = appState.generationProgress {
+                                    Text(progress.displayText)
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                        .monospacedDigit()
+                                } else {
+                                    Text("Preparing...")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
                             }
                             .padding(.leading)
                             .padding(.top, 8)
@@ -162,11 +169,15 @@ struct ChatView: View {
                 appState.messages.removeLast()
             }
 
-            // Generate response (skip search if no index)
-            let response = try await appState.chatService?.generate(
+            // Generate response with RAG (retrieves relevant context automatically)
+            let response = try await appState.chatService?.generateWithRAG(
                 query: query,
-                context: []
-            ) ?? "No response"
+                topK: 5
+            ) { [weak appState] progress in
+                Task { @MainActor in
+                    appState?.generationProgress = progress
+                }
+            } ?? "No response"
 
             let assistantMessage = ChatMessage(
                 role: .assistant,
@@ -184,6 +195,7 @@ struct ChatView: View {
         }
 
         appState.isGenerating = false
+        appState.generationProgress = nil
     }
 }
 

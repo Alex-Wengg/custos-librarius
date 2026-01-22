@@ -1,0 +1,50 @@
+[
+    {
+        "id": "quiz_001",
+        "name": "History Quiz",
+        "difficulty": "Medium",
+        "questions": [
+            {
+                "id": "q001",
+                "question": "Approximately how long is the Great Wall of China?",
+                "options": ["5,000 miles", "13,171 miles", "8,000 miles", "20,000 miles"],
+                "correctIndex": 1,
+                "source": "History of China",
+                "explanation": "The Great Wall stretches approximately 13,171 miles (21,196 km) in total length."
+            },
+            {
+                "id": "q002",
+                "question": "What was the primary purpose of the Silk Road?",
+                "options": ["Military expansion", "Religious pilgrimage", "Trade and cultural exchange", "Agricultural development"],
+                "correctIndex": 2,
+                "source": "History of China",
+                "explanation": "The Silk Road was an ancient network of trade routes connecting East and West for commercial and cultural exchange."
+            }
+        ],
+        "createdAt": "2024-01-15T10:00:00Z"
+    },
+    {
+        "id": "quiz_002",
+        "name": "AI Fundamentals",
+        "difficulty": "Easy",
+        "questions": [
+            {
+                "id": "q003",
+                "question": "What is machine learning a subset of?",
+                "options": ["Data science", "Artificial intelligence", "Robotics", "Computer graphics"],
+                "correctIndex": 1,
+                "source": "Introduction to AI",
+                "explanation": "Machine learning is a subset of artificial intelligence that enables systems to learn from experience."
+            },
+            {
+                "id": "q004",
+                "question": "What are neural networks inspired by?",
+                "options": ["Computer circuits", "Biological neural networks", "Mathematical equations", "Internet protocols"],
+                "correctIndex": 1,
+                "source": "Introduction to AI",
+                "explanation": "Neural networks are computing systems inspired by biological neural networks in animal brains."
+            }
+        ],
+        "createdAt": "2024-01-16T10:00:00Z"
+    }
+]

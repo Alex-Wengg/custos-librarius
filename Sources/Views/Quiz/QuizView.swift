@@ -27,6 +27,9 @@ struct QuizView: View {
     @State private var availableSources: [String] = []
     @State private var showSettings = false
 
+    // Generation Progress
+    @State private var generationProgress: QuizGenerationProgress?
+
     var body: some View {
         VStack(spacing: 0) {
             if (questions.isEmpty && openEndedQuestions.isEmpty) && !isGenerating {
@@ -150,12 +153,35 @@ struct QuizView: View {
     }
 
     var generatingView: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-                .controlSize(.large)
-            Text("Generating quiz questions...")
-                .foregroundColor(.secondary)
+        VStack(spacing: 20) {
+            if let progress = generationProgress {
+                // Progress bar
+                VStack(spacing: 12) {
+                    ProgressView(value: progress.progress)
+                        .progressViewStyle(.linear)
+                        .frame(width: 200)
+
+                    Text(progress.displayText)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                }
+
+                // Animated indicator
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Please wait...")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Preparing quiz...")
+                    .foregroundColor(.secondary)
+            }
         }
+        .padding(40)
     }
 
     // MARK: - Quiz Content
@@ -574,10 +600,12 @@ struct QuizView: View {
     // MARK: - Functions
 
     func loadSources() {
-        do {
-            availableSources = try appState.chatService?.getAvailableSources() ?? []
-        } catch {
-            print("Error loading sources: \(error)")
+        Task {
+            do {
+                availableSources = try await appState.chatService?.getAvailableSources() ?? []
+            } catch {
+                print("Error loading sources: \(error)")
+            }
         }
     }
 
@@ -593,6 +621,7 @@ struct QuizView: View {
 
     func generateQuiz() {
         isGenerating = true
+        generationProgress = nil
 
         Task { @MainActor in
             do {
@@ -603,7 +632,11 @@ struct QuizView: View {
                         count: questionCount,
                         difficulty: difficulty,
                         sources: sources
-                    ) ?? []
+                    ) { [self] progress in
+                        Task { @MainActor in
+                            self.generationProgress = progress
+                        }
+                    } ?? []
                     questions = generated
                     openEndedQuestions = []
                 } else {
@@ -611,7 +644,11 @@ struct QuizView: View {
                         count: questionCount,
                         difficulty: difficulty,
                         sources: sources
-                    ) ?? []
+                    ) { [self] progress in
+                        Task { @MainActor in
+                            self.generationProgress = progress
+                        }
+                    } ?? []
                     openEndedQuestions = generated
                     questions = []
                 }
@@ -627,6 +664,7 @@ struct QuizView: View {
                 print("Error generating quiz: \(error)")
             }
             isGenerating = false
+            generationProgress = nil
         }
     }
 
