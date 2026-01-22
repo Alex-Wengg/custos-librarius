@@ -191,19 +191,142 @@ actor DocumentProcessingService {
             guard let text = page.string else { continue }
 
             let pageNumber = pageIndex + 1
-            let lines = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
 
-            for line in lines {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // Use NLTokenizer to detect proper paragraph boundaries
+            let paragraphs = extractParagraphsNL(from: text)
+
+            for paragraph in paragraphs {
+                let trimmed = paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
 
-                // Detect structure based on formatting heuristics
-                let element = classifyLine(trimmed, page: pageNumber, currentChapter: &currentChapter, currentSection: &currentSection)
-                elements.append(element)
+                // Check if this looks like a header (short, title case or all caps)
+                let wordCount = trimmed.split(separator: " ").count
+                let isShort = wordCount <= 10
+
+                if isShort {
+                    // Could be a header - use line classification
+                    let element = classifyLine(trimmed, page: pageNumber, currentChapter: &currentChapter, currentSection: &currentSection)
+                    elements.append(element)
+                } else {
+                    // Regular paragraph - keep as-is
+                    elements.append(DocumentElement(type: .paragraph, text: trimmed, page: pageNumber, level: 0))
+                }
             }
         }
 
         return elements
+    }
+
+    /// Extract paragraphs using Apple's NLTokenizer
+    private func extractParagraphsNL(from text: String) -> [String] {
+        // First, normalize the text - join lines that are part of the same paragraph
+        // PDF often has hard line breaks within paragraphs
+        let normalized = normalizePDFText(text)
+
+        let tokenizer = NLTokenizer(unit: .paragraph)
+        tokenizer.string = normalized
+
+        var paragraphs: [String] = []
+        tokenizer.enumerateTokens(in: normalized.startIndex..<normalized.endIndex) { range, _ in
+            let paragraph = String(normalized[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !paragraph.isEmpty {
+                paragraphs.append(paragraph)
+            }
+            return true
+        }
+
+        // If NLTokenizer didn't find paragraphs, fall back to double-newline split
+        if paragraphs.isEmpty || paragraphs.count == 1 {
+            paragraphs = normalized.components(separatedBy: "\n\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+
+        return paragraphs
+    }
+
+    /// Normalize PDF text by joining lines that are part of the same paragraph
+    private func normalizePDFText(_ text: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        var result: [String] = []
+        var currentParagraph = ""
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // Empty line = paragraph break
+            if trimmed.isEmpty {
+                if !currentParagraph.isEmpty {
+                    result.append(currentParagraph)
+                    currentParagraph = ""
+                }
+                continue
+            }
+
+            // Check if this line starts a new paragraph
+            let startsNewParagraph = isNewParagraphStart(trimmed, previousText: currentParagraph)
+
+            if startsNewParagraph && !currentParagraph.isEmpty {
+                result.append(currentParagraph)
+                currentParagraph = trimmed
+            } else if currentParagraph.isEmpty {
+                currentParagraph = trimmed
+            } else {
+                // Join with previous line
+                // Add space unless previous ends with hyphen (word continuation)
+                if currentParagraph.hasSuffix("-") {
+                    currentParagraph = String(currentParagraph.dropLast()) + trimmed
+                } else {
+                    currentParagraph += " " + trimmed
+                }
+            }
+        }
+
+        // Don't forget last paragraph
+        if !currentParagraph.isEmpty {
+            result.append(currentParagraph)
+        }
+
+        return result.joined(separator: "\n\n")
+    }
+
+    /// Detect if a line starts a new paragraph
+    private func isNewParagraphStart(_ line: String, previousText: String) -> Bool {
+        // Empty previous = definitely new paragraph
+        if previousText.isEmpty { return true }
+
+        // Previous ends with sentence-ending punctuation
+        let prevTrimmed = previousText.trimmingCharacters(in: .whitespaces)
+        if let last = prevTrimmed.last {
+            let sentenceEnders: Set<Character> = [".", "!", "?", ":", ";"]
+            if sentenceEnders.contains(last) {
+                // And current starts with uppercase = new paragraph
+                if let first = line.first, first.isUppercase {
+                    return true
+                }
+            }
+        }
+
+        // Line starts with bullet, number, or special character
+        if line.hasPrefix("•") || line.hasPrefix("-") || line.hasPrefix("*") {
+            return true
+        }
+        if let first = line.first, first.isNumber {
+            // "1." or "1)" pattern
+            if line.contains(".") || line.contains(")") {
+                let prefix = line.prefix(4)
+                if prefix.contains(".") || prefix.contains(")") {
+                    return true
+                }
+            }
+        }
+
+        // Line is all caps (likely header)
+        if line == line.uppercased() && line.count > 3 && line.contains(" ") {
+            return true
+        }
+
+        return false
     }
 
     // MARK: - Text Extraction
