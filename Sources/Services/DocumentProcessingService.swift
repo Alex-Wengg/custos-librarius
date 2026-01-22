@@ -19,12 +19,63 @@ struct SemanticChunk: Codable, Identifiable {
     let precedingContext: String?
     let followingContext: String?
 
+    // NL-extracted entities (fast mode)
+    let people: [String]?
+    let places: [String]?
+    let organizations: [String]?
+    let keyTerms: [String]?
+
     var metadata: [String: String] {
         var meta: [String: String] = ["source": source]
         if let page = page { meta["page"] = String(page) }
         if let section = section { meta["section"] = section }
         if let chapter = chapter { meta["chapter"] = chapter }
         return meta
+    }
+
+    // Convenience init without entities (backwards compatible)
+    init(id: String, text: String, source: String, page: Int?, section: String?, chapter: String?,
+         startIndex: Int, endIndex: Int, sentenceCount: Int, wordCount: Int,
+         precedingContext: String?, followingContext: String?) {
+        self.id = id
+        self.text = text
+        self.source = source
+        self.page = page
+        self.section = section
+        self.chapter = chapter
+        self.startIndex = startIndex
+        self.endIndex = endIndex
+        self.sentenceCount = sentenceCount
+        self.wordCount = wordCount
+        self.precedingContext = precedingContext
+        self.followingContext = followingContext
+        self.people = nil
+        self.places = nil
+        self.organizations = nil
+        self.keyTerms = nil
+    }
+
+    // Full init with entities
+    init(id: String, text: String, source: String, page: Int?, section: String?, chapter: String?,
+         startIndex: Int, endIndex: Int, sentenceCount: Int, wordCount: Int,
+         precedingContext: String?, followingContext: String?,
+         people: [String]?, places: [String]?, organizations: [String]?, keyTerms: [String]?) {
+        self.id = id
+        self.text = text
+        self.source = source
+        self.page = page
+        self.section = section
+        self.chapter = chapter
+        self.startIndex = startIndex
+        self.endIndex = endIndex
+        self.sentenceCount = sentenceCount
+        self.wordCount = wordCount
+        self.precedingContext = precedingContext
+        self.followingContext = followingContext
+        self.people = people
+        self.places = places
+        self.organizations = organizations
+        self.keyTerms = keyTerms
     }
 }
 
@@ -145,7 +196,7 @@ actor DocumentProcessingService {
             onProgress?("Summarizing chunks with AI...")
             mergedChunks = try await summarizeChunks(mergedChunks, chatService: chat, onProgress: onProgress)
         } else {
-            // Fast mode: Heuristic filtering + sentence fix
+            // Fast mode: Heuristic filtering + NL enhancements
             onProgress?("Filtering non-content chunks...")
             mergedChunks = heuristicFilterChunks(mergedChunks)
 
@@ -158,6 +209,10 @@ actor DocumentProcessingService {
             mergedChunks = midSentenceResult.chunks
             stats.chunksMergedContext = midSentenceResult.merged
             stats.chunksMarkedContinuation = midSentenceResult.marked
+
+            // Extract entities using NLTagger (fast, no ML model needed)
+            onProgress?("Extracting entities with NLTagger...")
+            mergedChunks = extractEntitiesFromChunks(mergedChunks)
         }
         stats.chunksFiltered = beforeCount - mergedChunks.count
 
@@ -1388,6 +1443,108 @@ actor DocumentProcessingService {
             return ChunkClassification(contentType: .content, chapter: fallbackChunk.chapter, section: fallbackChunk.section, quality: 0.7)
         }
     }
+
+    // MARK: - NL Entity Extraction (Fast Mode)
+
+    /// Extract entities from chunks using Apple's NLTagger
+    private func extractEntitiesFromChunks(_ chunks: [SemanticChunk]) -> [SemanticChunk] {
+        return chunks.map { chunk in
+            let entities = extractEntities(from: chunk.text)
+            let keyTerms = extractKeyTerms(from: chunk.text)
+
+            return SemanticChunk(
+                id: chunk.id,
+                text: chunk.text,
+                source: chunk.source,
+                page: chunk.page,
+                section: chunk.section,
+                chapter: chunk.chapter,
+                startIndex: chunk.startIndex,
+                endIndex: chunk.endIndex,
+                sentenceCount: chunk.sentenceCount,
+                wordCount: chunk.wordCount,
+                precedingContext: chunk.precedingContext,
+                followingContext: chunk.followingContext,
+                people: entities.people.isEmpty ? nil : entities.people,
+                places: entities.places.isEmpty ? nil : entities.places,
+                organizations: entities.organizations.isEmpty ? nil : entities.organizations,
+                keyTerms: keyTerms.isEmpty ? nil : keyTerms
+            )
+        }
+    }
+
+    /// Extract named entities (people, places, organizations) using NLTagger
+    private func extractEntities(from text: String) -> (people: [String], places: [String], organizations: [String]) {
+        var people: Set<String> = []
+        var places: Set<String> = []
+        var organizations: Set<String> = []
+
+        let tagger = NLTagger(tagSchemes: [.nameType])
+        tagger.string = text
+
+        let options: NLTagger.Options = [.omitWhitespace, .omitPunctuation, .joinNames]
+
+        tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .nameType, options: options) { tag, tokenRange in
+            guard let tag = tag else { return true }
+
+            let entity = String(text[tokenRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard entity.count > 1 else { return true }  // Skip single chars
+
+            switch tag {
+            case .personalName:
+                people.insert(entity)
+            case .placeName:
+                places.insert(entity)
+            case .organizationName:
+                organizations.insert(entity)
+            default:
+                break
+            }
+            return true
+        }
+
+        return (Array(people), Array(places), Array(organizations))
+    }
+
+    /// Extract key terms (nouns) using NLTagger
+    private func extractKeyTerms(from text: String, maxTerms: Int = 10) -> [String] {
+        var termCounts: [String: Int] = [:]
+
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        tagger.string = text
+
+        let options: NLTagger.Options = [.omitWhitespace, .omitPunctuation]
+
+        tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .lexicalClass, options: options) { tag, tokenRange in
+            guard let tag = tag else { return true }
+
+            // Only keep nouns (key concepts)
+            if tag == .noun {
+                let term = String(text[tokenRange]).lowercased()
+                // Filter out very short or common words
+                if term.count > 3 && !commonWords.contains(term) {
+                    termCounts[term, default: 0] += 1
+                }
+            }
+            return true
+        }
+
+        // Return top terms by frequency
+        return termCounts
+            .sorted { $0.value > $1.value }
+            .prefix(maxTerms)
+            .map { $0.key }
+    }
+
+    /// Common words to filter out from key terms
+    private let commonWords: Set<String> = [
+        "that", "this", "these", "those", "which", "what", "where", "when", "while",
+        "their", "there", "they", "them", "then", "than", "have", "been", "being",
+        "would", "could", "should", "other", "some", "many", "more", "most", "such",
+        "only", "also", "well", "just", "even", "much", "each", "very", "same",
+        "case", "part", "time", "year", "years", "way", "ways", "thing", "things",
+        "people", "work", "fact", "point", "number", "place", "example", "state"
+    ]
 
     // MARK: - Helpers
 
