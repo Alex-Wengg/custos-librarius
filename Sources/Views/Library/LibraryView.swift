@@ -252,7 +252,11 @@ struct DocumentsSection: View {
                     var statusMsg = "Processed \(result.chunks.count) chunks from \(result.stats.totalDocuments) documents"
                     statusMsg += " (avg \(Int(result.stats.avgChunkLength)) words/chunk)"
                     if result.stats.chunksFiltered > 0 {
-                        statusMsg += " - \(result.stats.chunksFiltered) filtered by AI"
+                        statusMsg += " - \(result.stats.chunksFiltered) filtered"
+                    }
+                    let midSentenceFixes = result.stats.chunksMergedContext + result.stats.chunksMarkedContinuation
+                    if midSentenceFixes > 0 {
+                        statusMsg += " - \(midSentenceFixes) mid-sentence fixed"
                     }
                     indexingStatus = statusMsg
                     isIndexing = false

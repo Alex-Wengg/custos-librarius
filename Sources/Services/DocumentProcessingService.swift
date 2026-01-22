@@ -59,6 +59,8 @@ struct ProcessingStats {
     var chunksWithPage: Int = 0
     var sentencesSplit: Int = 0  // Should be 0
     var chunksFiltered: Int = 0  // Removed by AI classification
+    var chunksMergedContext: Int = 0  // Mid-sentence chunks fixed by merging context
+    var chunksMarkedContinuation: Int = 0  // Chunks marked with [...] prefix
 }
 
 /// AI classification result for a chunk
@@ -149,6 +151,13 @@ actor DocumentProcessingService {
 
         // Step 3: Re-add context overlap after filtering
         mergedChunks = addContextOverlap(to: mergedChunks)
+
+        // Step 4: Fix mid-sentence chunks
+        onProgress?("Fixing mid-sentence chunks...")
+        let midSentenceResult = fixMidSentenceChunks(mergedChunks)
+        mergedChunks = midSentenceResult.chunks
+        stats.chunksMergedContext = midSentenceResult.merged
+        stats.chunksMarkedContinuation = midSentenceResult.marked
 
         // Calculate stats
         stats.totalChunks = mergedChunks.count
@@ -601,6 +610,73 @@ actor DocumentProcessingService {
         }
 
         return result
+    }
+
+    // MARK: - Mid-Sentence Fix
+
+    /// Fix chunks that start mid-sentence by merging preceding context
+    /// Returns: (fixedChunks, mergedCount, markedCount)
+    private func fixMidSentenceChunks(_ chunks: [SemanticChunk]) -> (chunks: [SemanticChunk], merged: Int, marked: Int) {
+        var result: [SemanticChunk] = []
+        var mergedCount = 0
+        var markedCount = 0
+
+        for chunk in chunks {
+            var text = chunk.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            var needsFix = startsMidSentence(text)
+
+            // Step 1: If starts mid-sentence and has preceding context, merge it
+            if needsFix, let preceding = chunk.precedingContext?.trimmingCharacters(in: .whitespacesAndNewlines), !preceding.isEmpty {
+                text = preceding + " " + text
+                // Normalize whitespace
+                text = text.replacingOccurrences(of: "  ", with: " ")
+                text = text.replacingOccurrences(of: "\n ", with: "\n")
+                mergedCount += 1
+                needsFix = startsMidSentence(text)
+            }
+
+            // Step 2: If still starts mid-sentence, add [...] marker
+            if needsFix {
+                text = "[...] " + text
+                markedCount += 1
+            }
+
+            // Create updated chunk
+            let updatedChunk = SemanticChunk(
+                id: chunk.id,
+                text: text,
+                source: chunk.source,
+                page: chunk.page,
+                section: chunk.section,
+                chapter: chunk.chapter,
+                startIndex: chunk.startIndex,
+                endIndex: chunk.endIndex,
+                sentenceCount: chunk.sentenceCount,
+                wordCount: text.split(separator: " ").count,
+                precedingContext: chunk.precedingContext,
+                followingContext: chunk.followingContext
+            )
+            result.append(updatedChunk)
+        }
+
+        if mergedCount > 0 || markedCount > 0 {
+            print("Mid-sentence fix: merged \(mergedCount) chunks, marked \(markedCount) with [...]")
+        }
+
+        return (result, mergedCount, markedCount)
+    }
+
+    /// Check if text starts mid-sentence
+    private func startsMidSentence(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        // Starts with lowercase letter
+        if let first = trimmed.first, first.isLowercase {
+            return true
+        }
+
+        return false
     }
 
     // MARK: - Chunk Merging
