@@ -344,8 +344,12 @@ struct LibraryDropZone: View {
 struct TrainingSection: View {
     @EnvironmentObject var appState: AppState
     @State private var status = ""
-    @State private var isGeneratingData = false
-    @State private var qaCount = 0
+    @State private var pipelineProgress: PipelineProgress?
+    @State private var isRunning = false
+    @State private var existingExampleCount = 0
+    @State private var hasAdapter = false
+    @State private var targetExamples = 250
+    @State private var chunkCount = 0
 
     var body: some View {
         ScrollView {
@@ -356,21 +360,127 @@ struct TrainingSection: View {
                         .font(.system(size: 48))
                         .foregroundColor(.accentColor)
 
-                    Text("Train on Your Library")
+                    Text("LoRA Fine-Tuning")
                         .font(.title2)
                         .fontWeight(.bold)
 
-                    Text("Fine-tune the AI to become an expert on your documents")
+                    Text("Train the AI to become an expert on your documents using LOCAL Qwen model")
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                 }
                 .padding(.top, 20)
 
-                // Status
-                if !status.isEmpty {
+                // Status indicators
+                HStack(spacing: 16) {
+                    StatusBadge(
+                        icon: "doc.text",
+                        label: "Documents",
+                        value: "\(appState.documents.count)",
+                        isGood: !appState.documents.isEmpty
+                    )
+                    StatusBadge(
+                        icon: "square.stack.3d.up",
+                        label: "Chunks",
+                        value: "\(chunkCount)",
+                        isGood: chunkCount > 0
+                    )
+                    StatusBadge(
+                        icon: "list.bullet.rectangle",
+                        label: "Examples",
+                        value: "\(existingExampleCount)",
+                        isGood: existingExampleCount > 0
+                    )
+                    StatusBadge(
+                        icon: "cpu",
+                        label: "Adapter",
+                        value: hasAdapter ? "Ready" : "None",
+                        isGood: hasAdapter
+                    )
+                }
+
+                // Warning if documents exist but not processed
+                if !appState.documents.isEmpty && chunkCount == 0 {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text("Documents need to be processed first. Go to Documents tab and click 'Process Fast'.")
+                            .font(.callout)
+                    }
+                    .padding()
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
+
+                // Model status
+                GroupBox("Local Model") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if appState.modelLoaded {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Qwen model loaded and ready")
+                                Spacer()
+                            }
+
+                            // Show adapter status
+                            if appState.adapterLoaded {
+                                HStack {
+                                    Image(systemName: "brain.head.profile")
+                                        .foregroundColor(.purple)
+                                    Text("Fine-tuned adapter active")
+                                        .foregroundColor(.purple)
+                                    Spacer()
+                                }
+                            }
+                        } else {
+                            HStack {
+                                Image(systemName: "exclamationmark.circle")
+                                    .foregroundColor(.orange)
+                                Text("Model will be loaded when training starts")
+                                Spacer()
+                            }
+                        }
+
+                        Text("Training data is generated using your local Qwen model - no API key needed!")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(8)
+                }
+
+                // Progress
+                if let progress = pipelineProgress {
+                    GroupBox(progress.phase.rawValue) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ProgressView(value: Double(progress.percentComplete), total: 100) {
+                                HStack {
+                                    Text(progress.detail)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text("\(progress.percentComplete)%")
+                                }
+                                .font(.caption)
+                            }
+
+                            if let trainingProgress = progress.trainingProgress {
+                                HStack(spacing: 24) {
+                                    LossIndicator(label: "Train", value: trainingProgress.trainingLoss)
+                                    if let validLoss = trainingProgress.validationLoss {
+                                        LossIndicator(label: "Valid", value: validLoss)
+                                    }
+                                    LossIndicator(label: "Best", value: trainingProgress.bestLoss, highlight: true)
+                                }
+                            }
+                        }
+                        .padding(8)
+                    }
+                }
+
+                // Status message
+                if !status.isEmpty && pipelineProgress == nil {
                     GroupBox {
                         HStack {
-                            if isGeneratingData || appState.isTraining {
+                            if isRunning {
                                 ProgressView()
                                     .controlSize(.small)
                             }
@@ -382,72 +492,64 @@ struct TrainingSection: View {
                     }
                 }
 
-                // Progress
-                if appState.isTraining, let progress = appState.trainingProgress {
-                    GroupBox("Training Progress") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            ProgressView(value: Double(progress.iteration), total: Double(progress.totalIterations)) {
-                                HStack {
-                                    Text("Iteration \(progress.iteration)/\(progress.totalIterations)")
-                                    Spacer()
-                                    Text("\(Int(Double(progress.iteration) / Double(progress.totalIterations) * 100))%")
-                                }
-                            }
-
-                            HStack(spacing: 24) {
-                                VStack(alignment: .leading) {
-                                    Text("Training Loss")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Text(String(format: "%.4f", progress.trainingLoss))
-                                        .font(.title3)
-                                        .fontWeight(.medium)
-                                }
-
-                                if let validLoss = progress.validationLoss {
-                                    VStack(alignment: .leading) {
-                                        Text("Validation Loss")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                        Text(String(format: "%.4f", validLoss))
-                                            .font(.title3)
-                                            .fontWeight(.medium)
-                                    }
-                                }
-
-                                VStack(alignment: .leading) {
-                                    Text("Best Loss")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Text(String(format: "%.4f", progress.bestLoss))
-                                        .font(.title3)
-                                        .fontWeight(.medium)
-                                        .foregroundColor(.green)
-                                }
-                            }
+                // Actions
+                VStack(spacing: 12) {
+                    if isRunning {
+                        Button("Stop") {
+                            stopPipeline()
                         }
-                        .padding(8)
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                    } else {
+                        // Full pipeline button
+                        Button {
+                            runFullPipeline()
+                        } label: {
+                            Label("Generate & Train", systemImage: "sparkles")
+                                .frame(width: 200)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(!canRunPipeline)
+
+                        // Individual actions
+                        HStack(spacing: 12) {
+                            Button {
+                                generateDataOnly()
+                            } label: {
+                                Label("Generate Data Only", systemImage: "doc.badge.plus")
+                            }
+                            .disabled(!canGenerateData)
+
+                            Button {
+                                trainFromExisting()
+                            } label: {
+                                Label("Train from Existing", systemImage: "cpu")
+                            }
+                            .disabled(existingExampleCount == 0)
+                        }
+                        .buttonStyle(.bordered)
                     }
                 }
 
-                // Actions
-                if appState.isTraining {
-                    Button("Stop Training") {
-                        appState.trainingService?.stopTraining()
-                        appState.isTraining = false
-                        status = "Training stopped"
+                // Settings
+                GroupBox("Settings") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Target examples:")
+                            Picker("", selection: $targetExamples) {
+                                Text("50").tag(50)
+                                Text("100").tag(100)
+                                Text("200").tag(200)
+                                Text("250").tag(250)
+                            }
+                            .frame(width: 80)
+                            Text("(more = better quality but slower)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
-                    .buttonStyle(.bordered)
-                } else {
-                    Button {
-                        trainOnLibrary()
-                    } label: {
-                        Label("Train on Library", systemImage: "sparkles")
-                            .frame(width: 200)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(isGeneratingData || appState.documents.isEmpty)
+                    .padding(8)
                 }
 
                 // Info
@@ -456,10 +558,10 @@ struct TrainingSection: View {
                         Label("How it works", systemImage: "info.circle")
                             .font(.headline)
 
-                        Text("1. AI reads your documents and generates Q&A pairs")
-                        Text("2. Data is split into training (80%) and validation (20%)")
-                        Text("3. Model trains with early stopping to prevent overfitting")
-                        Text("4. Your custom AI expert is ready to use!")
+                        Text("1. Local Qwen model generates Q&A from your documents")
+                        Text("2. Data is formatted for Qwen and split 80/20 train/valid")
+                        Text("3. LoRA adapter trains with early stopping")
+                        Text("4. Adapter is saved and used for improved quiz generation")
                     }
                     .font(.callout)
                     .foregroundColor(.secondary)
@@ -468,137 +570,205 @@ struct TrainingSection: View {
                 }
             }
             .padding(24)
-            .frame(maxWidth: 500)
+            .frame(maxWidth: 600)
             .frame(maxWidth: .infinity)
+        }
+        .onAppear {
+            refreshStatus()
         }
     }
 
-    func trainOnLibrary() {
+    // MARK: - Computed Properties
+
+    var canRunPipeline: Bool {
+        chunkCount > 0
+    }
+
+    var canGenerateData: Bool {
+        chunkCount > 0
+    }
+
+    // MARK: - Actions
+
+    func refreshStatus() {
         guard let project = appState.currentProject else { return }
 
-        isGeneratingData = true
-        status = "Generating Q&A pairs from your documents..."
+        Task {
+            let pipeline = TrainingPipeline(projectPath: project.path)
+            existingExampleCount = await pipeline.getExistingExampleCount()
+            hasAdapter = pipeline.hasTrainedAdapter()
+
+            // Load chunk count
+            let chunksPath = project.path.appendingPathComponent("data/chunks_v2.json")
+            if let data = try? Data(contentsOf: chunksPath),
+               let chunks = try? JSONDecoder().decode([SemanticChunk].self, from: data) {
+                await MainActor.run {
+                    chunkCount = chunks.count
+                }
+            } else {
+                await MainActor.run {
+                    chunkCount = 0
+                }
+            }
+        }
+    }
+
+    func runFullPipeline() {
+        guard let project = appState.currentProject else { return }
+
+        isRunning = true
+        status = ""
 
         Task { @MainActor in
+            let pipeline = TrainingPipeline(projectPath: project.path)
+
             do {
-                let dataDir = project.path.appendingPathComponent("data")
-                let chunksPath = dataDir.appendingPathComponent("chunks_v2.json")
-
-                // Load chunks
-                guard FileManager.default.fileExists(atPath: chunksPath.path) else {
-                    status = "No indexed documents. Please index your documents first."
-                    isGeneratingData = false
-                    return
-                }
-
-                let chunksData = try Data(contentsOf: chunksPath)
-                let chunks = try JSONDecoder().decode([SemanticChunk].self, from: chunksData)
-
-                guard !chunks.isEmpty else {
-                    status = "No content found in documents."
-                    isGeneratingData = false
-                    return
-                }
-
-                // Generate Q&A pairs using the LLM
-                status = "Generating Q&A pairs... (this may take a few minutes)"
-
-                var qaPairs: [(String, String)] = []
-                let selectedChunks = chunks.shuffled().prefix(min(20, chunks.count))
-
-                for (i, chunk) in selectedChunks.enumerated() {
-                    status = "Generating Q&A from chunk \(i + 1)/\(selectedChunks.count)..."
-
-                    if let pair = try await generateQAPair(from: chunk.text) {
-                        qaPairs.append(pair)
+                let result = try await pipeline.runFullPipeline(
+                    targetExamples: targetExamples,
+                    trainingIterations: 200,
+                    patience: 5,
+                    learningRate: 1e-5,
+                    loraLayers: 4
+                ) { progress in
+                    Task { @MainActor in
+                        pipelineProgress = progress
                     }
                 }
 
-                qaCount = qaPairs.count
-                status = "Generated \(qaCount) Q&A pairs. Preparing training data..."
+                status = "Complete! Generated \(result.examplesGenerated) examples, best loss: \(String(format: "%.4f", result.bestLoss))"
+                pipelineProgress = nil
+                refreshStatus()
+            } catch {
+                status = "Error: \(error.localizedDescription)"
+                pipelineProgress = nil
+            }
 
-                // Shuffle and split 80/20
-                let shuffled = qaPairs.shuffled()
-                let splitIndex = Int(Double(shuffled.count) * 0.8)
-                let trainPairs = Array(shuffled.prefix(splitIndex))
-                let validPairs = Array(shuffled.suffix(from: splitIndex))
+            isRunning = false
+        }
+    }
 
-                // Write JSONL files
-                let trainPath = dataDir.appendingPathComponent("train.jsonl")
-                let validPath = dataDir.appendingPathComponent("valid.jsonl")
+    func generateDataOnly() {
+        guard let project = appState.currentProject else { return }
 
-                try writeQAPairs(trainPairs, to: trainPath)
-                try writeQAPairs(validPairs, to: validPath)
+        isRunning = true
+        status = "Loading model and generating training data..."
 
-                isGeneratingData = false
-                status = "Starting training with \(trainPairs.count) train / \(validPairs.count) validation pairs..."
+        Task { @MainActor in
+            let pipeline = TrainingPipeline(projectPath: project.path)
 
-                // Start training
-                appState.isTraining = true
+            do {
+                let result = try await pipeline.generateTrainingDataOnly(
+                    targetExamples: targetExamples
+                ) { progress in
+                    Task { @MainActor in
+                        status = progress.currentStatus
+                    }
+                }
 
-                try await appState.trainingService?.train(
-                    trainFile: trainPath,
-                    validFile: validPath,
+                status = "Generated \(result.examples.count) examples (saved for training)"
+                refreshStatus()
+            } catch {
+                status = "Error: \(error.localizedDescription)"
+            }
+
+            isRunning = false
+        }
+    }
+
+    func trainFromExisting() {
+        guard let project = appState.currentProject else { return }
+
+        isRunning = true
+        appState.isTraining = true
+
+        Task { @MainActor in
+            let pipeline = TrainingPipeline(projectPath: project.path)
+
+            do {
+                try await pipeline.trainFromExistingExamples(
                     iterations: 200,
                     patience: 5,
                     learningRate: 1e-5,
                     loraLayers: 4
                 ) { progress in
-                    appState.trainingProgress = progress
+                    Task { @MainActor in
+                        appState.trainingProgress = progress
+                        pipelineProgress = PipelineProgress(
+                            phase: .training,
+                            detail: "Iteration \(progress.iteration)/\(progress.totalIterations)",
+                            percentComplete: Int(progress.percentComplete),
+                            trainingProgress: progress
+                        )
+                    }
                 }
 
-                appState.isTraining = false
-                status = "Training complete! Your AI is now an expert on your documents."
-
+                status = "Training complete!"
+                pipelineProgress = nil
+                refreshStatus()
             } catch {
                 status = "Error: \(error.localizedDescription)"
-                isGeneratingData = false
-                appState.isTraining = false
+                pipelineProgress = nil
             }
+
+            isRunning = false
+            appState.isTraining = false
         }
     }
 
-    func generateQAPair(from text: String) async throws -> (String, String)? {
-        guard let chatService = appState.chatService else { return nil }
+    func stopPipeline() {
+        guard let project = appState.currentProject else { return }
+        let pipeline = TrainingPipeline(projectPath: project.path)
 
-        let response = try await chatService.generate(
-            query: """
-            Based on this text, create ONE question and answer pair.
-            Format: Q: [question]\\nA: [answer]
-            Keep both concise.
-
-            Text: \(text.prefix(1000))
-            """,
-            context: []
-        )
-
-        // Parse Q&A
-        let lines = response.components(separatedBy: "\n")
-        var question: String?
-        var answer: String?
-
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("Q:") {
-                question = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-            } else if trimmed.hasPrefix("A:") {
-                answer = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-            }
+        Task {
+            await pipeline.stopTraining()
         }
 
-        if let q = question, let a = answer, !q.isEmpty, !a.isEmpty {
-            return (q, a)
-        }
-        return nil
+        isRunning = false
+        appState.isTraining = false
+        pipelineProgress = nil
+        status = "Stopped"
     }
+}
 
-    func writeQAPairs(_ pairs: [(String, String)], to url: URL) throws {
-        var lines: [String] = []
-        for (q, a) in pairs {
-            let text = "Question: \(q)\nAnswer: \(a)"
-            let json = try JSONEncoder().encode(["text": text])
-            lines.append(String(data: json, encoding: .utf8)!)
+// MARK: - Supporting Views
+
+struct StatusBadge: View {
+    let icon: String
+    let label: String
+    let value: String
+    let isGood: Bool
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .foregroundColor(isGood ? .green : .secondary)
+            Text(value)
+                .font(.headline)
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
-        try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        .frame(width: 80)
+        .padding(8)
+        .background(Color(.controlBackgroundColor))
+        .cornerRadius(8)
+    }
+}
+
+struct LossIndicator: View {
+    let label: String
+    let value: Float
+    var highlight: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Text(String(format: "%.4f", value))
+                .font(.callout)
+                .fontWeight(.medium)
+                .foregroundColor(highlight ? .green : .primary)
+        }
     }
 }

@@ -19,6 +19,11 @@ struct QuizView: View {
     @State private var currentMessage = ""
     @State private var isResponding = false
 
+    // MCQ Discussion State
+    @State private var mcqDiscussionMessage = ""
+    @State private var isMCQDiscussing = false
+    @State private var showMCQDiscussion = false
+
     // Settings
     @State private var quizType: QuizType = .multipleChoice
     @State private var questionCount = 5
@@ -226,6 +231,7 @@ struct QuizView: View {
                     Text(questions[currentIndex].question)
                         .font(.title3)
                         .fontWeight(.medium)
+                        .textSelection(.enabled)
 
                     // Options
                     ForEach(0..<questions[currentIndex].options.count, id: \.self) { index in
@@ -257,9 +263,105 @@ struct QuizView: View {
                             Text(questions[currentIndex].explanation)
                                 .font(.callout)
                                 .foregroundColor(.secondary)
+                                .textSelection(.enabled)
                                 .padding()
                                 .background(Color(.systemGray).opacity(0.1))
                                 .cornerRadius(8)
+                        }
+                    }
+
+                    // Discussion Section (shown after answering)
+                    if hasAnswered {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Divider()
+                                .padding(.top, 8)
+
+                            // Toggle discussion
+                            Button {
+                                withAnimation {
+                                    showMCQDiscussion.toggle()
+                                }
+                            } label: {
+                                HStack {
+                                    Image(systemName: "bubble.left.and.bubble.right")
+                                    Text(showMCQDiscussion ? "Hide Discussion" : "Ask a Question")
+                                    if !questions[currentIndex].discussion.isEmpty {
+                                        Text("(\(questions[currentIndex].discussion.count))")
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: showMCQDiscussion ? "chevron.up" : "chevron.down")
+                                }
+                                .font(.callout)
+                            }
+                            .buttonStyle(.plain)
+
+                            if showMCQDiscussion {
+                                // Discussion messages
+                                if !questions[currentIndex].discussion.isEmpty {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        ForEach(questions[currentIndex].discussion) { message in
+                                            HStack(alignment: .top, spacing: 8) {
+                                                Image(systemName: message.isUser ? "person.circle.fill" : "brain")
+                                                    .foregroundColor(message.isUser ? .blue : .purple)
+
+                                                Text(message.content)
+                                                    .font(.callout)
+                                                    .textSelection(.enabled)
+                                                    .padding(10)
+                                                    .background(message.isUser ? Color.blue.opacity(0.1) : Color.purple.opacity(0.1))
+                                                    .cornerRadius(12)
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: message.isUser ? .trailing : .leading)
+                                        }
+                                    }
+                                    .padding(.vertical, 8)
+                                }
+
+                                // Input field
+                                HStack(spacing: 8) {
+                                    TextField("Ask about this question...", text: $mcqDiscussionMessage)
+                                        .textFieldStyle(.roundedBorder)
+                                        .disabled(isMCQDiscussing)
+
+                                    Button {
+                                        sendMCQDiscussionMessage()
+                                    } label: {
+                                        if isMCQDiscussing {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                        } else {
+                                            Image(systemName: "paperplane.fill")
+                                        }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(mcqDiscussionMessage.isEmpty || isMCQDiscussing)
+                                }
+
+                                // Suggested questions
+                                if questions[currentIndex].discussion.isEmpty {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Suggested questions:")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+
+                                        ForEach(suggestedMCQQuestions, id: \.self) { suggestion in
+                                            Button {
+                                                mcqDiscussionMessage = suggestion
+                                            } label: {
+                                                Text(suggestion)
+                                                    .font(.caption)
+                                                    .padding(.horizontal, 10)
+                                                    .padding(.vertical, 6)
+                                                    .background(Color.accentColor.opacity(0.1))
+                                                    .cornerRadius(12)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                    .padding(.top, 4)
+                                }
+                            }
                         }
                     }
                 }
@@ -275,6 +377,8 @@ struct QuizView: View {
                         currentIndex -= 1
                         selectedAnswer = questions[currentIndex].userAnswer
                         hasAnswered = questions[currentIndex].userAnswer != nil
+                        showMCQDiscussion = false
+                        mcqDiscussionMessage = ""
                     } label: {
                         Label("Previous", systemImage: "chevron.left")
                     }
@@ -286,6 +390,7 @@ struct QuizView: View {
                     if currentIndex == questions.count - 1 {
                         Button("See Results") {
                             quizComplete = true
+                            showMCQDiscussion = false
                         }
                         .buttonStyle(.borderedProminent)
                     } else {
@@ -293,6 +398,8 @@ struct QuizView: View {
                             currentIndex += 1
                             selectedAnswer = questions[currentIndex].userAnswer
                             hasAnswered = questions[currentIndex].userAnswer != nil
+                            showMCQDiscussion = false
+                            mcqDiscussionMessage = ""
                         } label: {
                             Label("Next", systemImage: "chevron.right")
                         }
@@ -619,6 +726,60 @@ struct QuizView: View {
         }
     }
 
+    // MARK: - MCQ Discussion
+
+    var suggestedMCQQuestions: [String] {
+        let isCorrect = selectedAnswer == questions[currentIndex].correctIndex
+        if isCorrect {
+            return [
+                "Why is this the correct answer?",
+                "Can you explain this concept in more detail?",
+                "What are related topics I should know?"
+            ]
+        } else {
+            return [
+                "Why was my answer wrong?",
+                "Can you explain the correct answer?",
+                "What should I study to understand this better?"
+            ]
+        }
+    }
+
+    func sendMCQDiscussionMessage() {
+        guard currentIndex < questions.count else { return }
+        let messageText = mcqDiscussionMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !messageText.isEmpty else { return }
+
+        // Add user message
+        let userMessage = DiscussionMessage(content: messageText, isUser: true)
+        questions[currentIndex].discussion.append(userMessage)
+        mcqDiscussionMessage = ""
+
+        isMCQDiscussing = true
+
+        Task { @MainActor in
+            do {
+                let question = questions[currentIndex]
+                let previousMessages = Array(question.discussion.dropLast()) // Exclude the message we just added
+
+                let response = try await appState.chatService?.discussMCQ(
+                    question: question,
+                    userMessage: messageText,
+                    previousMessages: previousMessages
+                ) ?? "Sorry, I couldn't generate a response."
+
+                let aiMessage = DiscussionMessage(content: response, isUser: false)
+                questions[currentIndex].discussion.append(aiMessage)
+            } catch {
+                print("Error in MCQ discussion: \(error)")
+                let errorMessage = DiscussionMessage(content: "Sorry, I encountered an error. Please try again.", isUser: false)
+                questions[currentIndex].discussion.append(errorMessage)
+            }
+
+            isMCQDiscussing = false
+        }
+    }
+
     func generateQuiz() {
         isGenerating = true
         generationProgress = nil
@@ -678,6 +839,9 @@ struct QuizView: View {
         quizComplete = false
         showReview = false
         currentMessage = ""
+        mcqDiscussionMessage = ""
+        showMCQDiscussion = false
+        isMCQDiscussing = false
     }
 
     func sendMessage() {
@@ -733,30 +897,58 @@ struct QuizView: View {
 
     func createPDF(at url: URL) {
         let pdfData = NSMutableData()
-        let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792) // Letter size
+        let pageWidth: CGFloat = 612
+        let pageHeight: CGFloat = 792 // Letter size
+        let pageRect = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
         let margin: CGFloat = 50
-        let contentWidth = pageRect.width - (margin * 2)
+        let contentWidth = pageWidth - (margin * 2)
+
+        // yFromTop tracks position from TOP of page (for our logic)
+        // We convert to PDF coordinates (from bottom) when drawing
+        var yFromTop: CGFloat = margin
 
         UIGraphicsBeginPDFContextToData(pdfData, pageRect, nil)
         UIGraphicsBeginPDFPage()
 
-        var yPosition: CGFloat = 50
-
-        // Helper to draw wrapped text and return height used
-        func drawWrappedText(_ text: String, at y: CGFloat, attrs: [NSAttributedString.Key: Any], indent: CGFloat = 0) -> CGFloat {
+        // Helper to calculate text height
+        func textHeight(_ text: String, attrs: [NSAttributedString.Key: Any], width: CGFloat) -> CGFloat {
             let attrString = NSAttributedString(string: text, attributes: attrs)
-            let textRect = CGRect(x: margin + indent, y: y, width: contentWidth - indent, height: .greatestFiniteMagnitude)
-            let boundingRect = attrString.boundingRect(with: CGSize(width: textRect.width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading])
-            attrString.draw(in: CGRect(x: margin + indent, y: y, width: contentWidth - indent, height: boundingRect.height))
-            return boundingRect.height
+            let boundingRect = attrString.boundingRect(
+                with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading]
+            )
+            return ceil(boundingRect.height)
         }
 
-        func newPageIfNeeded(_ height: CGFloat) {
-            if yPosition + height > pageRect.height - 50 {
-                UIGraphicsEndPDFPage()
-                UIGraphicsBeginPDFPage()
-                yPosition = 50
+        // Helper to draw wrapped text - converts from top-down to PDF bottom-up coordinates
+        func drawWrappedText(_ text: String, yTop: CGFloat, attrs: [NSAttributedString.Key: Any], indent: CGFloat = 0) -> CGFloat {
+            let width = contentWidth - indent
+            let attrString = NSAttributedString(string: text, attributes: attrs)
+            let boundingRect = attrString.boundingRect(
+                with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading]
+            )
+            let height = ceil(boundingRect.height)
+            // Convert: PDF y = pageHeight - topY - textHeight
+            let pdfY = pageHeight - yTop - height
+            attrString.draw(in: CGRect(x: margin + indent, y: pdfY, width: width, height: height))
+            return height
+        }
+
+        // Start a new page and reset position
+        func newPage() {
+            UIGraphicsEndPDFPage()
+            UIGraphicsBeginPDFPage()
+            yFromTop = margin
+        }
+
+        // Check if we need a new page
+        func ensureSpace(_ neededHeight: CGFloat) -> Bool {
+            if yFromTop + neededHeight > pageHeight - margin {
+                newPage()
+                return true
             }
+            return false
         }
 
         // Title
@@ -764,7 +956,7 @@ struct QuizView: View {
             .font: NSFont.boldSystemFont(ofSize: 24),
             .foregroundColor: NSColor.black
         ]
-        yPosition += drawWrappedText("Quiz Results - \(difficulty.rawValue)", at: yPosition, attrs: titleAttrs) + 10
+        yFromTop += drawWrappedText("Quiz Results - \(difficulty.rawValue)", yTop: yFromTop, attrs: titleAttrs) + 10
 
         // Score
         let scoreAttrs: [NSAttributedString.Key: Any] = [
@@ -772,16 +964,16 @@ struct QuizView: View {
             .foregroundColor: NSColor.darkGray
         ]
         let percentage = questions.count > 0 ? Int(Double(score) / Double(questions.count) * 100) : 0
-        yPosition += drawWrappedText("Score: \(score)/\(questions.count) (\(percentage)%)", at: yPosition, attrs: scoreAttrs) + 10
+        yFromTop += drawWrappedText("Score: \(score)/\(questions.count) (\(percentage)%)", yTop: yFromTop, attrs: scoreAttrs) + 10
 
         // Date
         let dateAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12),
             .foregroundColor: NSColor.gray
         ]
-        yPosition += drawWrappedText("Date: \(Date().formatted(date: .long, time: .shortened))", at: yPosition, attrs: dateAttrs) + 30
+        yFromTop += drawWrappedText("Date: \(Date().formatted(date: .long, time: .shortened))", yTop: yFromTop, attrs: dateAttrs) + 30
 
-        // Questions
+        // Question styling
         let questionAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.boldSystemFont(ofSize: 13),
             .foregroundColor: NSColor.black
@@ -803,13 +995,33 @@ struct QuizView: View {
             .foregroundColor: NSColor.gray
         ]
 
+        // Export ALL questions
         for (i, question) in questions.enumerated() {
-            newPageIfNeeded(120)
+            // Calculate total height needed for this question
+            let questionText = "\(i + 1). \(question.question)"
+            let questionHeight = textHeight(questionText, attrs: questionAttrs, width: contentWidth)
 
-            // Question number and text
-            yPosition += drawWrappedText("\(i + 1). \(question.question)", at: yPosition, attrs: questionAttrs) + 8
+            var optionsHeight: CGFloat = 0
+            for (j, option) in question.options.enumerated() {
+                let prefix = ["A", "B", "C", "D"][j]
+                let optText = "\(prefix). \(option)"
+                optionsHeight += textHeight(optText, attrs: optionAttrs, width: contentWidth - 15) + 4
+            }
 
-            // Options
+            let explanationHeight = question.explanation.isEmpty ? 0 :
+                textHeight("Explanation: \(question.explanation)", attrs: explanationAttrs, width: contentWidth - 15) + 10
+
+            let totalHeight = questionHeight + 8 + optionsHeight + explanationHeight + 20
+
+            // If question doesn't fit on current page and we're not at top, start new page
+            if yFromTop > margin && yFromTop + totalHeight > pageHeight - margin {
+                newPage()
+            }
+
+            // Draw question number and text
+            yFromTop += drawWrappedText(questionText, yTop: yFromTop, attrs: questionAttrs) + 8
+
+            // Draw options
             for (j, option) in question.options.enumerated() {
                 let prefix = ["A", "B", "C", "D"][j]
                 let isCorrect = j == question.correctIndex
@@ -817,24 +1029,32 @@ struct QuizView: View {
                 let attrs = isCorrect ? correctAttrs : (wasSelected ? wrongAttrs : optionAttrs)
                 let marker = isCorrect ? " ✓" : (wasSelected ? " ✗" : "")
 
-                newPageIfNeeded(20)
-                yPosition += drawWrappedText("\(prefix). \(option)\(marker)", at: yPosition, attrs: attrs, indent: 15) + 4
+                // Check if this option needs new page
+                let optText = "\(prefix). \(option)\(marker)"
+                let optHeight = textHeight(optText, attrs: attrs, width: contentWidth - 15)
+                _ = ensureSpace(optHeight + 4)
+
+                yFromTop += drawWrappedText(optText, yTop: yFromTop, attrs: attrs, indent: 15) + 4
             }
 
-            // Explanation
+            // Draw explanation
             if !question.explanation.isEmpty {
-                newPageIfNeeded(40)
-                yPosition += 5
-                yPosition += drawWrappedText("Explanation: \(question.explanation)", at: yPosition, attrs: explanationAttrs, indent: 15) + 5
+                let explText = "Explanation: \(question.explanation)"
+                let explHeight = textHeight(explText, attrs: explanationAttrs, width: contentWidth - 15)
+                _ = ensureSpace(explHeight + 10)
+
+                yFromTop += 5
+                yFromTop += drawWrappedText(explText, yTop: yFromTop, attrs: explanationAttrs, indent: 15) + 5
             }
 
-            yPosition += 20
+            yFromTop += 20
         }
 
         UIGraphicsEndPDFContext()
 
         do {
             try pdfData.write(to: url)
+            print("PDF saved successfully with \(questions.count) questions")
         } catch {
             print("Error saving PDF: \(error)")
         }
@@ -875,8 +1095,13 @@ struct QuizOptionButton: View {
     let hasAnswered: Bool
     let action: () -> Void
 
+    @State private var isHovering = false
+
     var backgroundColor: Color {
         if !hasAnswered {
+            if isHovering {
+                return Color.accentColor.opacity(0.15)
+            }
             return selectedAnswer == index ? Color.accentColor.opacity(0.2) : Color(.systemGray).opacity(0.1)
         } else {
             if index == correctAnswer {
@@ -890,49 +1115,76 @@ struct QuizOptionButton: View {
 
     var borderColor: Color {
         if !hasAnswered {
-            return selectedAnswer == index ? Color.accentColor : Color.clear
+            if selectedAnswer == index {
+                return Color.accentColor
+            }
+            return isHovering ? Color.accentColor.opacity(0.5) : Color(.systemGray).opacity(0.3)
         } else {
             if index == correctAnswer {
                 return Color.green
             } else if index == selectedAnswer {
                 return Color.red
             }
-            return Color.clear
+            return Color(.systemGray).opacity(0.2)
         }
     }
 
     var body: some View {
-        Button(action: action) {
-            HStack {
-                Text(["A", "B", "C", "D"][index])
-                    .fontWeight(.bold)
-                    .frame(width: 30)
+        HStack {
+            // Letter badge - clear click target indicator
+            Text(["A", "B", "C", "D"][index])
+                .fontWeight(.bold)
+                .foregroundColor(!hasAnswered ? .accentColor : .primary)
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(!hasAnswered && (isHovering || selectedAnswer == index)
+                            ? Color.accentColor.opacity(0.2)
+                            : Color(.systemGray).opacity(0.15))
+                )
 
-                Text(text)
-                    .multilineTextAlignment(.leading)
+            Text(text.isEmpty ? " " : text)
+                .multilineTextAlignment(.leading)
+                .foregroundColor(.primary)
+                .textSelection(.enabled)
+                .frame(minHeight: 20)
 
-                Spacer()
+            Spacer()
 
-                if hasAnswered {
-                    if index == correctAnswer {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                    } else if index == selectedAnswer {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.red)
-                    }
+            if hasAnswered {
+                if index == correctAnswer {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                } else if index == selectedAnswer {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.red)
                 }
+            } else {
+                // Tap indicator for unanswered options
+                Image(systemName: "hand.tap")
+                    .font(.caption)
+                    .foregroundColor(.secondary.opacity(isHovering ? 0.8 : 0.4))
             }
-            .padding()
-            .background(backgroundColor)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(borderColor, lineWidth: 2)
-            )
-            .cornerRadius(12)
         }
-        .buttonStyle(.plain)
-        .disabled(hasAnswered)
+        .padding()
+        .background(backgroundColor)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(borderColor, lineWidth: hasAnswered ? 2 : 1.5)
+        )
+        .cornerRadius(12)
+        .shadow(color: isHovering && !hasAnswered ? Color.accentColor.opacity(0.2) : Color.clear, radius: 4)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovering = hovering
+            }
+        }
+        .onTapGesture {
+            if !hasAnswered {
+                action()
+            }
+        }
     }
 }
 
@@ -954,6 +1206,7 @@ struct ReviewCard: View {
 
             Text(question.question)
                 .font(.headline)
+                .textSelection(.enabled)
 
             ForEach(0..<question.options.count, id: \.self) { i in
                 HStack {
@@ -962,6 +1215,7 @@ struct ReviewCard: View {
                         .frame(width: 24)
 
                     Text(question.options[i])
+                        .textSelection(.enabled)
 
                     Spacer()
 
@@ -986,6 +1240,7 @@ struct ReviewCard: View {
                 Text(question.explanation)
                     .font(.callout)
                     .foregroundColor(.secondary)
+                    .textSelection(.enabled)
                     .padding()
                     .background(Color(.systemGray).opacity(0.1))
                     .cornerRadius(8)
@@ -1063,9 +1318,13 @@ struct FlowLayout: Layout {
 
 // UIGraphics compatibility for macOS
 #if os(macOS)
+private var pdfPageRect: CGRect = .zero
+
 func UIGraphicsBeginPDFContextToData(_ data: NSMutableData, _ bounds: CGRect, _ documentInfo: [String: Any]?) {
+    pdfPageRect = bounds
     let consumer = CGDataConsumer(data: data as CFMutableData)!
-    let context = CGContext(consumer: consumer, mediaBox: nil, nil)!
+    var mediaBox = bounds
+    let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil)!
     NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
 }
 
@@ -1079,5 +1338,6 @@ func UIGraphicsEndPDFPage() {
 
 func UIGraphicsEndPDFContext() {
     NSGraphicsContext.current?.cgContext.closePDF()
+    NSGraphicsContext.current = nil
 }
 #endif

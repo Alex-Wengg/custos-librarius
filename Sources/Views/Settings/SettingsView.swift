@@ -17,18 +17,24 @@ struct MLXModel: Identifiable, Hashable {
 }
 
 let availableModels: [MLXModel] = [
-    // Small
+    // Small (1-3B, under 2GB)
     MLXModel(id: "mlx-community/Qwen2.5-1.5B-Instruct-4bit", name: "Qwen 2.5 1.5B", size: "~1GB", description: "Fast, low RAM", category: .small),
+    MLXModel(id: "mlx-community/DeepSeek-R1-Distill-Qwen-1.5B-4bit", name: "DeepSeek R1 1.5B", size: "~1GB", description: "R1 reasoning, fast", category: .small),
     MLXModel(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", name: "Qwen 2.5 3B", size: "~2GB", description: "Balanced speed/quality", category: .small),
     MLXModel(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", name: "Llama 3.2 3B", size: "~2GB", description: "Meta, good reasoning", category: .small),
 
-    // Medium
+    // Medium (7-8B, 3-5GB)
     MLXModel(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", name: "Qwen 2.5 7B", size: "~4GB", description: "Recommended - best quality/speed", category: .medium),
+    MLXModel(id: "mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit", name: "DeepSeek R1 7B (4-bit)", size: "~4GB", description: "R1 reasoning, great quality", category: .medium),
+    MLXModel(id: "mlx-community/DeepSeek-R1-Distill-Qwen-14B-3bit", name: "DeepSeek R1 14B (3-bit)", size: "~5GB", description: "14B speed, fits 16GB!", category: .medium),
     MLXModel(id: "mlx-community/Llama-3.1-8B-Instruct-4bit", name: "Llama 3.1 8B", size: "~4.5GB", description: "Meta, strong all-around", category: .medium),
 
-    // Large
+    // Large (14B+, 8GB+)
     MLXModel(id: "mlx-community/Qwen2.5-14B-Instruct-4bit", name: "Qwen 2.5 14B", size: "~8GB", description: "Excellent reasoning", category: .large),
+    MLXModel(id: "mlx-community/DeepSeek-R1-Distill-Qwen-14B-4bit", name: "DeepSeek R1 14B (4-bit)", size: "~8GB", description: "R1 reasoning, excellent", category: .large),
+    MLXModel(id: "mlx-community/DeepSeek-R1-Distill-Qwen-32B-3bit", name: "DeepSeek R1 32B (3-bit)", size: "~12GB", description: "32B quality, less RAM", category: .large),
     MLXModel(id: "mlx-community/Qwen2.5-32B-Instruct-4bit", name: "Qwen 2.5 32B", size: "~18GB", description: "Top tier (needs 32GB+ RAM)", category: .large),
+    MLXModel(id: "mlx-community/DeepSeek-R1-Distill-Qwen-32B-4bit", name: "DeepSeek R1 32B (4-bit)", size: "~18GB", description: "Best R1 reasoning (32GB+ RAM)", category: .large),
 ]
 
 let availableEmbeddingModels: [MLXModel] = [
@@ -215,11 +221,33 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
 
+            Section("System Info") {
+                HStack {
+                    Text("RAM")
+                    Spacer()
+                    Text("\(Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824)) GB")
+                        .foregroundColor(.secondary)
+                }
+
+                if appState.adapterLoaded {
+                    HStack {
+                        Text("LoRA Adapter")
+                        Spacer()
+                        Text("Active")
+                            .foregroundColor(.green)
+                    }
+                }
+            }
+
             Section("Developer") {
                 Button("Run LLM Tests") {
                     showLLMTests = true
                 }
                 .disabled(appState.chatService == nil)
+
+                Button("Reset Onboarding") {
+                    UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
+                }
 
                 if appState.chatService == nil {
                     Text("Open a project to enable LLM tests")

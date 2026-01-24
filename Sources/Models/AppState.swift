@@ -36,6 +36,7 @@ class AppState: ObservableObject {
     @Published var modelLoadingProgress: Double = 0
     @Published var embeddingModelLoaded = false
     @Published var isLoadingModels = false
+    @Published var adapterLoaded = false
 
     // Services
     var chatService: ChatService?
@@ -169,6 +170,13 @@ class AppState: ObservableObject {
             print("Loading LLM model...")
             try await chatService?.loadModel()
             modelLoaded = true
+
+            // Check if adapter was loaded
+            if let hasAdapter = await chatService?.hasLoadedAdapter {
+                adapterLoaded = hasAdapter
+                print(hasAdapter ? "LoRA adapter loaded" : "No adapter (base model)")
+            }
+
             modelLoadingProgress = 0.6
             print("LLM model loaded")
 
@@ -251,6 +259,11 @@ struct TrainingProgress {
     let validationLoss: Float?
     let bestLoss: Float
     let patienceCounter: Int
+
+    var percentComplete: Double {
+        guard totalIterations > 0 else { return 0 }
+        return Double(iteration) / Double(totalIterations) * 100
+    }
 }
 
 struct GenerationProgress {

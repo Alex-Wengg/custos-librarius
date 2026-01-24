@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXLLM
 import MLXLMCommon
+import MLXNN
 
 /// Service for LLM chat and generation with RAG support
 actor ChatService {
@@ -10,6 +11,7 @@ actor ChatService {
     private var modelConfig: ModelConfiguration?
     private var searchService: SearchService?
     private let rerankingService = RerankingService()
+    private(set) var hasLoadedAdapter = false
 
     init(projectPath: URL) {
         self.projectPath = projectPath
@@ -166,7 +168,37 @@ actor ChatService {
         let config = try JSONDecoder().decode(AppProjectConfig.self, from: data)
 
         modelConfig = ModelConfiguration(id: config.model)
-        modelContainer = try await LLMModelFactory.shared.loadContainer(configuration: modelConfig!)
+
+        // Check for trained adapter
+        let adapterPath = projectPath.appendingPathComponent("data/adapters.safetensors")
+        let adapterExists = FileManager.default.fileExists(atPath: adapterPath.path)
+
+        if adapterExists {
+            // Load model context (gives us access to model for LoRA)
+            let context = try await LLMModelFactory.shared.load(configuration: modelConfig!)
+
+            // Apply LoRA configuration matching training parameters
+            let loraConfig = LoRAConfiguration(
+                numLayers: 4,
+                fineTuneType: .lora,
+                loraParameters: .init(rank: 8, scale: 10.0)
+            )
+            _ = try LoRAContainer.from(model: context.model, configuration: loraConfig)
+
+            // Load and apply trained adapter weights
+            let adapterWeights = try loadArrays(url: adapterPath)
+            context.model.update(parameters: ModuleParameters.unflattened(adapterWeights))
+
+            // Create container with the LoRA-enhanced model
+            modelContainer = ModelContainer(context: context)
+            hasLoadedAdapter = true
+            print("Loaded model with trained LoRA adapter (\(adapterWeights.count) parameters)")
+        } else {
+            // Load base model without adapter
+            modelContainer = try await LLMModelFactory.shared.loadContainer(configuration: modelConfig!)
+            hasLoadedAdapter = false
+            print("Loaded base model (no adapter found)")
+        }
     }
 
     func generate(query: String, context: [String], onProgress: ((GenerationProgress) -> Void)? = nil) async throws -> String {
@@ -359,38 +391,7 @@ actor ChatService {
     // MARK: - Few-Shot Examples
 
     private func getFewShotExamples(difficulty: QuizDifficulty) -> String {
-        switch difficulty {
-        case .easy:
-            return """
-            Example 1:
-            Text: "The Silk Road was an ancient network of trade routes connecting East and West, established during the Han Dynasty around 130 BCE."
-            Question: {"question": "When was the Silk Road established?", "options": ["130 BCE", "500 CE", "1200 CE", "50 BCE"], "correctIndex": 0, "explanation": "The Silk Road was established during the Han Dynasty around 130 BCE."}
-
-            Example 2:
-            Text: "Marco Polo was a Venetian merchant who traveled to China in the 13th century and wrote about his experiences."
-            Question: {"question": "What was Marco Polo's profession?", "options": ["Merchant", "Soldier", "Priest", "Scholar"], "correctIndex": 0, "explanation": "Marco Polo was a Venetian merchant who traveled to China."}
-            """
-        case .medium:
-            return """
-            Example 1:
-            Text: "The Tang Dynasty is considered a golden age of Chinese civilization, known for its advances in art, poetry, and technology."
-            Question: {"question": "Why is the Tang Dynasty considered a golden age of Chinese civilization?", "options": ["Advances in art, poetry, and technology", "Military conquests across Asia", "Establishment of paper currency", "Development of gunpowder weapons"], "correctIndex": 0, "explanation": "The Tang Dynasty is known for its advances in art, poetry, and technology."}
-
-            Example 2:
-            Text: "Confucianism emphasizes filial piety, respect for elders, and social harmony, which influenced Chinese governance for centuries."
-            Question: {"question": "Which philosophical tradition emphasized filial piety and social harmony in Chinese governance?", "options": ["Confucianism", "Daoism", "Legalism", "Buddhism"], "correctIndex": 0, "explanation": "Confucianism emphasizes filial piety, respect for elders, and social harmony."}
-            """
-        case .hard:
-            return """
-            Example 1:
-            Text: "The examination system in imperial China was both a tool for social mobility and a mechanism for reinforcing Confucian orthodoxy."
-            Question: {"question": "How did the imperial examination system serve dual purposes in Chinese society?", "options": ["It enabled social mobility while reinforcing Confucian orthodoxy", "It trained soldiers while spreading Buddhism", "It promoted trade while limiting foreign influence", "It centralized power while encouraging regional autonomy"], "correctIndex": 0, "explanation": "The examination system allowed talented individuals to rise socially while ensuring Confucian values remained dominant."}
-
-            Example 2:
-            Text: "The One-Child Policy, implemented in 1979, aimed to curb population growth but led to demographic imbalances and aging population concerns."
-            Question: {"question": "What unintended demographic consequences emerged from China's One-Child Policy implemented in 1979?", "options": ["Gender imbalance and aging population", "Rural depopulation and urbanization", "Ethnic minority decline and cultural loss", "Economic stagnation and unemployment"], "correctIndex": 0, "explanation": "The One-Child Policy led to demographic imbalances including gender imbalance and an aging population."}
-            """
-        }
+        return QuizExamples.formatExamplesForPrompt(difficulty: difficulty, count: 3)
     }
 
     // MARK: - Chain-of-Thought Prompting
@@ -400,26 +401,41 @@ actor ChatService {
         case .easy:
             return """
             Think step by step:
-            1. Identify the main FACT in the text (a date, name, place, or definition)
-            2. Create a direct question asking about that fact
-            3. The correct answer should be stated explicitly in the text
-            4. Create 3 plausible but incorrect options of the SAME TYPE
+            1. IDENTIFY: Find a specific FACT (date, name, place, number, definition)
+            2. QUESTION: Write a complete, self-contained question
+               - MUST include: WHO (full name), WHAT (specific event/concept), WHEN/WHERE if relevant
+               - Example: "In what year did [Person's Full Name] [do specific thing]?"
+               - NOT: "When did this happen?" or "What did the author say?"
+            3. CORRECT ANSWER: The exact fact from the text
+            4. DISTRACTORS: 3 wrong answers of the SAME TYPE
+               - If answer is a year, all options are years from same era
+               - If answer is a name, all options are similar names
             """
         case .medium:
             return """
             Think step by step:
-            1. Identify the main CONCEPT or RELATIONSHIP in the text
-            2. Create a question that tests understanding, not just recall
-            3. The answer should require connecting ideas from the text
-            4. Create 3 plausible alternatives that represent common misconceptions
+            1. IDENTIFY: Find a CONCEPT, CAUSE, or RELATIONSHIP
+            2. QUESTION: Write a "why" or "how" question that stands alone
+               - MUST name the specific person, theory, event, or work being discussed
+               - Example: "Why does [Person] argue that [specific claim] in [Work]?"
+               - NOT: "Why does the author believe this?" or "What is the main argument?"
+            3. CORRECT ANSWER: Requires understanding, not just recall
+            4. DISTRACTORS: 3 plausible but wrong explanations
+               - Common misconceptions about this specific topic
+               - Similar complexity to correct answer
             """
         case .hard:
             return """
             Think step by step:
-            1. Identify the IMPLICATIONS or ANALYSIS possible from the text
-            2. Create a question requiring synthesis or evaluation
-            3. The answer should require inferring beyond what's explicitly stated
-            4. Create 3 alternatives that are partially correct or represent sophisticated misunderstandings
+            1. IDENTIFY: Find an IMPLICATION, PARADOX, or ANALYTICAL point
+            2. QUESTION: Write a question requiring inference or synthesis
+               - MUST provide full context: name the thinker, the work, the specific argument
+               - Example: "What paradox does [Person] identify in [specific phenomenon] according to [Work]?"
+               - NOT: "What is the deeper meaning?" or "What does the text imply?"
+            3. CORRECT ANSWER: Requires going beyond surface reading
+            4. DISTRACTORS: 3 sophisticated alternatives
+               - Partially true or address related but different points
+               - Would fool someone who only skimmed the material
             """
         }
     }
@@ -438,24 +454,41 @@ actor ChatService {
         for _ in 0..<numCandidates {
             let messages: [Chat.Message] = [
                 .system("""
-                You create educational multiple choice questions. Follow these rules:
-                1. SELF-CONTAINED: Include all context in the question itself
-                2. SPECIFIC: Name all people, places, events explicitly
-                3. CONSISTENT: Question type must match answer type
-                4. FOUR OPTIONS: All options must be the same type
+                You are an expert quiz creator. Create self-contained multiple choice questions.
+
+                CRITICAL RULES - VIOLATIONS WILL BE REJECTED:
+
+                1. SELF-CONTAINED: Someone who never read the source must understand the question
+                   - BAD: "What does the author argue about society?"
+                   - GOOD: "What does Wang Huning argue about American individualism in 'America Against America'?"
+
+                2. NO VAGUE REFERENCES - These phrases are BANNED:
+                   - "the text", "the passage", "the author", "the speaker"
+                   - "according to", "based on the text", "as mentioned"
+                   - "which of the following best describes"
+
+                3. NAME EVERYTHING EXPLICITLY:
+                   - BAD: "What year did this event occur?"
+                   - GOOD: "In what year did the Treaty of Westphalia end the Thirty Years' War?"
+
+                4. OPTIONS MUST BE:
+                   - Exactly 4 choices (just the answer text, no "A)" or "B)" prefixes)
+                   - All the same type (all dates, OR all names, OR all concepts)
+                   - Plausible and similar in length
 
                 \(fewShotExamples)
                 """),
                 .user("""
                 \(chainOfThought)
 
-                Now create a question from this text.
+                Create ONE question from this text. The question MUST be understandable without the source.
 
-                Text from "\(chunk.source)":
+                Source document: "\(chunk.source)"
+                Content:
                 \(chunk.text.prefix(800))
 
                 Output ONLY valid JSON:
-                {"question": "...", "options": ["A", "B", "C", "D"], "correctIndex": 0, "explanation": "..."}
+                {"question": "Full self-contained question here?", "options": ["option1", "option2", "option3", "option4"], "correctIndex": 0, "explanation": "Why this answer is correct"}
                 """)
             ]
 
@@ -510,22 +543,44 @@ actor ChatService {
             return nil
         }
 
+        // Clean up options - remove duplicate labels like "A)" or "D) "
+        let cleanedOptions = raw.options.map { option -> String in
+            var cleaned = option.trimmingCharacters(in: .whitespaces)
+
+            // Remove leading option labels: "A)", "A.", "A:", "a)", etc.
+            let labelPatterns = [
+                #"^[A-Da-d][\)\.\:]\s*"#,  // A) or A. or A:
+                #"^[A-Da-d]\s+[\)\.\:]\s*"#,  // A ) or A .
+                #"^\([A-Da-d]\)\s*"#,  // (A)
+            ]
+            for pattern in labelPatterns {
+                if let range = cleaned.range(of: pattern, options: .regularExpression) {
+                    cleaned = String(cleaned[range.upperBound...])
+                }
+            }
+
+            return cleaned.trimmingCharacters(in: .whitespaces)
+        }
+
         // Validate
         let placeholders = ["option1", "option2", "option3", "option4", "...", "answer1", "answer2"]
-        guard raw.options.count == 4,
-              Set(raw.options).count == 4,
-              !raw.options.contains(where: { placeholders.contains($0.lowercased()) }),
-              raw.options.allSatisfy({ $0.count > 1 }) else {
+        guard cleanedOptions.count == 4,
+              Set(cleanedOptions).count == 4,
+              !cleanedOptions.contains(where: { placeholders.contains($0.lowercased()) }),
+              cleanedOptions.allSatisfy({ $0.count > 1 }) else {
             return nil
         }
 
+        // Clean up question
+        let cleanedQuestion = raw.question.trimmingCharacters(in: .whitespaces)
+
         // Shuffle options
-        var shuffledOptions = raw.options.enumerated().map { ($0.offset, $0.element) }
+        var shuffledOptions = cleanedOptions.enumerated().map { ($0.offset, $0.element) }
         shuffledOptions.shuffle()
         let newCorrectIndex = shuffledOptions.firstIndex { $0.0 == raw.correctIndex } ?? 0
 
         return QuizQuestion(
-            question: raw.question,
+            question: cleanedQuestion,
             options: shuffledOptions.map { $0.1 },
             correctIndex: newCorrectIndex,
             source: source,
@@ -621,17 +676,27 @@ actor ChatService {
             issues.append("Question too short")
         }
 
-        // 2. Self-containment checks
+        // 2. Self-containment checks - STRICT list of banned phrases
         let vagueReferences = [
-            "the author", "the writer", "this text", "the passage",
-            "the article", "the document", "according to the text",
-            "in the reading", "the above", "mentioned above"
+            // Text references
+            "the text", "this text", "the passage", "this passage",
+            "the article", "the document", "the reading",
+            "according to the text", "based on the text", "in the text",
+            "the text suggests", "the text states", "the text mentions",
+            "as mentioned", "mentioned above", "the above",
+            // Person references
+            "the author", "the writer", "the speaker", "the narrator",
+            // Generic references
+            "in the reading", "from the reading", "the source",
+            "which of the following", "best describes", "best captures"
         ]
         let questionLower = question.question.lowercased()
+        var hasVagueReference = false
         for vague in vagueReferences {
             if questionLower.contains(vague) {
                 issues.append("Contains vague reference: '\(vague)'")
-                selfContainmentScore -= 1
+                selfContainmentScore -= 2
+                hasVagueReference = true
             }
         }
 
@@ -641,6 +706,7 @@ actor ChatService {
             if questionLower.hasPrefix(pronoun) {
                 issues.append("Starts with undefined pronoun")
                 selfContainmentScore -= 2
+                hasVagueReference = true
                 break
             }
         }
@@ -658,19 +724,33 @@ actor ChatService {
             issues.append("Options are not all the same type")
         }
 
-        // 6. Check for placeholder text
-        let placeholders = ["...", "[", "]", "option", "answer", "example"]
+        // 6. Check for placeholder text or malformed options
+        let badPatterns = ["...", "[", "]", "option", "answer", "example", "a)", "b)", "c)", "d)"]
         for opt in question.options {
-            for placeholder in placeholders {
-                if opt.lowercased().contains(placeholder) {
-                    issues.append("Option contains placeholder text")
+            let optLower = opt.lowercased()
+            for pattern in badPatterns {
+                if optLower.contains(pattern) {
+                    issues.append("Option contains bad pattern: '\(pattern)'")
                     break
                 }
             }
         }
 
+        // 7. Check if question is too long/complex (sign of embedded explanation)
+        if question.question.count > 300 {
+            issues.append("Question too long - may have embedded explanation")
+            selfContainmentScore -= 1
+        }
+
         selfContainmentScore = max(0, selfContainmentScore)
-        let isValid = issues.filter { !$0.contains("vague") && !$0.contains("pronoun") }.isEmpty
+
+        // STRICT: Reject if has vague references OR structural issues
+        let hasStructuralIssues = issues.contains {
+            $0.contains("Must have") || $0.contains("out of bounds") ||
+            $0.contains("Duplicate") || $0.contains("too short") ||
+            $0.contains("bad pattern")
+        }
+        let isValid = !hasVagueReference && !hasStructuralIssues
 
         return ValidationResult(
             isValid: isValid,
@@ -802,31 +882,41 @@ actor ChatService {
         chunk: SemanticChunk,
         fewShotExamples: String,
         chainOfThought: String,
-        maxRetries: Int = 3
+        maxRetries: Int = 4
     ) async throws -> QuizQuestion? {
+        var allCandidates: [QuizQuestion] = []
+
         for attempt in 0..<maxRetries {
             let candidates = try await generateQuestionCandidates(
                 container: container,
                 chunk: chunk,
                 fewShotExamples: fewShotExamples,
                 chainOfThought: chainOfThought,
-                numCandidates: attempt == 0 ? 2 : 1 // More candidates on first try
+                numCandidates: attempt == 0 ? 3 : 2 // More candidates on first try
             )
 
-            // Check if any candidate passes validation
+            allCandidates.append(contentsOf: candidates)
+
+            // Check if any candidate passes STRICT validation
             for candidate in candidates {
                 let validation = validateQuestion(candidate)
-                if validation.isValid && validation.selfContainmentScore >= 3 {
+                if validation.isValid && validation.selfContainmentScore >= 4 {
                     return candidate
                 }
             }
-
-            // If we have candidates but none pass strict validation, use best one on last retry
-            if attempt == maxRetries - 1 && !candidates.isEmpty {
-                return selectBestCandidate(candidates: candidates, chunk: chunk)
-            }
         }
 
+        // After all retries, pick the best from all candidates if any pass minimum validation
+        let validCandidates = allCandidates.filter { candidate in
+            let validation = validateQuestion(candidate)
+            return validation.isValid && validation.selfContainmentScore >= 2
+        }
+
+        if let best = selectBestCandidate(candidates: validCandidates, chunk: chunk) {
+            return best
+        }
+
+        // If no valid candidates at all, return nil (skip this chunk)
         return nil
     }
 
@@ -969,6 +1059,64 @@ actor ChatService {
         return questions
     }
 
+    /// Discuss a multiple choice question with the user
+    func discussMCQ(question: QuizQuestion, userMessage: String, previousMessages: [DiscussionMessage]) async throws -> String {
+        guard let container = modelContainer else {
+            throw ServiceError.modelNotLoaded
+        }
+
+        let isCorrect = question.userAnswer == question.correctIndex
+        let userAnswerText = question.userAnswer != nil ? question.options[question.userAnswer!] : "none"
+        let correctAnswerText = question.options[question.correctIndex]
+
+        var chatHistory: [Chat.Message] = [
+            .system("""
+            You are a helpful study tutor. The student just answered a quiz question and wants to discuss it.
+
+            Question: \(question.question)
+            Student's answer: \(userAnswerText) (\(isCorrect ? "CORRECT" : "INCORRECT"))
+            Correct answer: \(correctAnswerText)
+            Explanation: \(question.explanation)
+            Source: \(question.source)
+
+            Your role:
+            - If they got it right: Reinforce why it's correct, add interesting context
+            - If they got it wrong: Be encouraging, explain why the correct answer is right
+            - Answer their follow-up questions clearly and helpfully
+            - Keep responses concise (2-3 paragraphs max)
+            - Focus on helping them understand and remember the material
+            """)
+        ]
+
+        // Add previous discussion messages
+        for msg in previousMessages {
+            if msg.isUser {
+                chatHistory.append(.user(msg.content))
+            } else {
+                chatHistory.append(.assistant(msg.content))
+            }
+        }
+
+        // Add current user message
+        chatHistory.append(.user(userMessage))
+
+        let userInput = UserInput(chat: chatHistory)
+        var output = ""
+
+        try await container.perform { context in
+            let input = try await context.processor.prepare(input: userInput)
+            let parameters = GenerateParameters(maxTokens: 512, temperature: 0.7)
+
+            for await item in try MLXLMCommon.generate(input: input, parameters: parameters, context: context) {
+                if case .chunk(let chunk) = item {
+                    output += chunk
+                }
+            }
+        }
+
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func discussAnswer(question: OpenEndedQuestion, userAnswer: String, previousMessages: [DiscussionMessage]) async throws -> String {
         guard let container = modelContainer else {
             throw ServiceError.modelNotLoaded
@@ -1030,6 +1178,7 @@ struct QuizQuestion: Identifiable {
     let source: String
     var explanation: String = ""
     var userAnswer: Int? = nil
+    var discussion: [DiscussionMessage] = []
 }
 
 struct OpenEndedQuestion: Identifiable {
@@ -1050,7 +1199,7 @@ struct DiscussionMessage: Identifiable {
     let timestamp: Date = Date()
 }
 
-enum QuizDifficulty: String, CaseIterable {
+enum QuizDifficulty: String, CaseIterable, Codable {
     case easy = "Easy"
     case medium = "Medium"
     case hard = "Hard"
